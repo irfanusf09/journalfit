@@ -139,9 +139,25 @@ METRICS_JSON = ('{"days_to_first_decision": number|null, "days_to_acceptance": n
 GUIDE_JSON = ('{"guidelines_url": str, "submission_system": "ScholarOne|Editorial Manager|'
               'Elsevier Editorial|Snapp|MDPI SuSy|OJS|other", "submission_url": str|null, '
               '"word_limit": int|null, "abstract_word_limit": int|null, "keyword_limit": str|null, '
-              '"reference_style": str, "required_items": [str], '
+              '"reference_style": str, "format_free_first_submission": bool|null, '
+              '"required_items": [str], '
               '"issues": [{"item": str, "manuscript": str, "requirement": str}], '
-              '"article_type_accepted": bool|null}')
+              '"minor_issues": [{"item": str, "manuscript": str, "requirement": str}], '
+              '"can_wait": [str], "article_type_accepted": bool|null}')
+GUIDE_RULES = (
+    "Sort everything by whether it matters at FIRST submission:\n"
+    "- required_items: only what the submission system or editor needs now, without which the paper "
+    "is returned or desk-rejected: e.g. required declarations/statements (competing interests, funding, "
+    "data availability, ethics), a separate title page, an anonymised manuscript for double-blind review, "
+    "highlights or a graphical abstract only if mandatory at submission.\n"
+    "- issues: only serious mismatches of that kind: well over the word or abstract limit, an article type "
+    "the journal doesn't publish, missing abstract or keywords, wrong language.\n"
+    "- minor_issues and can_wait: formatting and style details that editors don't desk-reject for and that "
+    "are normally fixed at revision or acceptance: reference style and punctuation, fonts, line spacing, "
+    "heading levels, figure file formats and resolution, slightly over a limit.\n"
+    "- format_free_first_submission: true if the guidelines say any reasonable format/reference style is "
+    "accepted for the first submission (e.g. 'Your Paper Your Way', 'format-free submission').\n"
+    "Be brief; don't list routine things every journal asks for after acceptance.")
 
 
 class LLM:
@@ -265,10 +281,7 @@ class LLM:
             f"{len(ms.keywords)} keywords; {ms.figure_count} figures; {ms.table_count} tables; "
             f"{len(ms.references)} references. Reference sample:\n" + "\n".join(ms.references[:3]) + "\n\n"
         )
-        tail = (f"End your reply with a fenced json block:\n```json\n{GUIDE_JSON}\n```\n"
-                "required_items = files/statements needed at submission (e.g. highlights, graphical "
-                "abstract, data availability, CRediT, conflict of interest, ethics, suggested reviewers, "
-                "title page). issues = concrete mismatches between the manuscript facts and the rules.")
+        tail = f"End your reply with a fenced json block:\n```json\n{GUIDE_JSON}\n```\n" + GUIDE_RULES
         system = "You are a meticulous editorial assistant preparing a journal submission."
         intro = f"Journal: {j.name} ({j.publisher}), ISSN {', '.join(j.issns)}, homepage {j.homepage or 'unknown'}.\n"
         if self.has_web:
@@ -318,17 +331,24 @@ def _metrics_schema() -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
+def _issue_list() -> dict:
+    return {"type": "array", "items": {
+        "type": "object",
+        "properties": {"item": {"type": "string"}, "manuscript": {"type": "string"}, "requirement": {"type": "string"}},
+        "required": ["item", "manuscript", "requirement"], "additionalProperties": False}}
+
+
 def _guide_schema() -> dict:
     props = {
         "guidelines_url": {"type": "string"}, "submission_system": {"type": "string"},
         "submission_url": _nullable("string"), "word_limit": _nullable("integer"),
         "abstract_word_limit": _nullable("integer"), "keyword_limit": _nullable("string"),
         "reference_style": {"type": "string"},
+        "format_free_first_submission": _nullable("boolean"),
         "required_items": {"type": "array", "items": {"type": "string"}},
-        "issues": {"type": "array", "items": {
-            "type": "object",
-            "properties": {"item": {"type": "string"}, "manuscript": {"type": "string"}, "requirement": {"type": "string"}},
-            "required": ["item", "manuscript", "requirement"], "additionalProperties": False}},
+        "issues": _issue_list(),
+        "minor_issues": _issue_list(),
+        "can_wait": {"type": "array", "items": {"type": "string"}},
         "article_type_accepted": _nullable("boolean"),
     }
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
@@ -667,6 +687,7 @@ class DeepSeek(LLM):
                 out = _unwrap(_json_from_text(text) if not text.strip().startswith("{") else json.loads(text), required)
             except (LLMError, json.JSONDecodeError):
                 out = {}
+            _fill_optional(out, schema)
             last_missing = [k for k in required if k not in out]
             if not last_missing:
                 return out
@@ -702,6 +723,20 @@ def _example(schema: dict):
     if t == "array":
         return [_example(schema.get("items") or {"type": "string"})]
     return {"string": "...", "number": 0, "integer": 0, "boolean": False}.get(t, "...")
+
+
+def _fill_optional(out: dict, schema: dict) -> None:
+    """Give omitted optional parts (lists, nullable values) their empty value instead of failing."""
+    if not isinstance(out, dict):
+        return
+    for k, sub in (schema.get("properties") or {}).items():
+        if k in out:
+            continue
+        t = sub.get("type")
+        if t == "array":
+            out[k] = []
+        elif isinstance(t, list) and "null" in t:
+            out[k] = None
 
 
 def _unwrap(out, required: list[str]) -> dict:

@@ -294,3 +294,29 @@ def test_cover_letter_includes_journal_required_declarations():
                    ["Cover letter including preprint server declaration", "Title page", "6-8 keywords"])
     prompt = msgs.calls[0]["messages"][0]["content"]
     assert "preprint server declaration" in prompt and "Title page" not in prompt
+
+
+def test_deepseek_fills_omitted_optional_parts(monkeypatch):
+    from journalfit.llm import _guide_schema
+
+    post = FakePost([_ds('{"guidelines_url": "u", "submission_system": "Snapp", "reference_style": "Springer",'
+                         ' "required_items": ["Competing interests"]}')])
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    out = DeepSeek("deepseek-flash", "k").structured("s", "p", _guide_schema())
+    assert out["can_wait"] == [] and out["minor_issues"] == [] and out["word_limit"] is None
+    assert len(post.calls) == 1
+
+
+def test_checklist_separates_must_from_can_wait():
+    from journalfit.models import Candidate
+    from journalfit.prepare import _checklist
+
+    guide = {"format_free_first_submission": True, "required_items": ["Competing interests statement"],
+             "issues": [{"item": "Word count", "manuscript": "12,000", "requirement": "max 8,000"}],
+             "minor_issues": [{"item": "Reference style", "manuscript": "APA", "requirement": "Springer author-date"}],
+             "can_wait": ["10-point Times Roman"]}
+    text = _checklist(Manuscript(path="x", abstract="a b"), Candidate(journal=Journal("S", "ESPR")), guide)
+    must, later = text.split("## Can wait")
+    assert "Word count" in must and "Competing interests" in must and "Reference style" not in must
+    assert "Reference style" in later and "Times Roman" in later
+    assert "accepts any reasonable format" in text

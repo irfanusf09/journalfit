@@ -86,13 +86,26 @@ def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[s
         lines.append(f"Author guidelines: {guide['guidelines_url']}")
     if guide.get("submission_url"):
         lines.append(f"Submission site ({guide.get('submission_system') or 'unknown system'}): {guide['submission_url']}")
+    if guide.get("format_free_first_submission"):
+        lines += ["", "Good news: this journal accepts any reasonable format and reference style for the "
+                      "first submission. Formatting can wait until revision."]
     lines.append("")
     if guide.get("article_type_accepted") is False:
         lines += [f"**Warning:** the guidelines suggest this journal does not accept '{ms.article_type}'.", ""]
+
     issues = guide.get("issues") or []
-    lines.append("## Fix before submitting" if issues else "## No mismatches found against the guidelines")
+    items = guide.get("required_items") or ["Competing interests statement", "Funding statement",
+                                            "Data availability statement", "Author contributions"]
+    lines.append("## Must do before submitting")
     lines += [f"- [ ] **{i.get('item')}**: yours = {i.get('manuscript')}; required = {i.get('requirement')}"
               for i in issues]
+    lines += [f"- [ ] {item}" for item in items]
+    lines += ["- [ ] All co-authors have approved this version and the journal choice",
+              "- [ ] The manuscript is not under consideration at any other journal",
+              "- [ ] Cover letter read, and [placeholders] filled in"]
+    if supplements:
+        lines += ["", "## Supplementary files in this package"] + [f"- {n}" for n in supplements]
+
     lines += ["", "## Facts"]
     for k, label in (("word_limit", "Word limit"), ("abstract_word_limit", "Abstract limit"),
                      ("keyword_limit", "Keywords"), ("reference_style", "Reference style")):
@@ -100,14 +113,11 @@ def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[s
             lines.append(f"- {label}: {guide[k]}")
     lines.append(f"- Your manuscript: {ms.word_count} words, abstract {len(ms.abstract.split())} words, "
                  f"{len(ms.keywords)} keywords, {ms.figure_count} figures, {ms.table_count} tables")
-    lines += ["", "## Items to upload / declare"]
-    items = guide.get("required_items") or ["Title page", "Conflict of interest statement",
-                                            "Data availability statement", "Author contributions"]
-    lines += [f"- [ ] {item}" for item in items]
-    if supplements:
-        lines += ["", "## Supplementary files in this package"] + [f"- [ ] {n}" for n in supplements]
-    lines += ["", "## Before you click Submit",
-              "- [ ] All co-authors have approved this version and the journal choice",
-              "- [ ] The manuscript is not under consideration at any other journal",
-              "- [ ] Cover letter reviewed and placeholders filled in"]
+
+    minor = guide.get("minor_issues") or []
+    later = guide.get("can_wait") or []
+    if minor or later:
+        lines += ["", "## Can wait (formatting; usually only needed at revision or acceptance)"]
+        lines += [f"- {i.get('item')}: yours = {i.get('manuscript')}; journal style = {i.get('requirement')}" for i in minor]
+        lines += [f"- {x}" for x in later]
     return "\n".join(lines) + "\n"
