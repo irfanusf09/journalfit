@@ -370,8 +370,41 @@ function showResults(r) {
       ${c.warnings.length ? `<div class="warn">⚠ ${esc(c.warnings.join("; "))}</div>` : ""}
       <details><summary>Similar papers it published</summary><ul class="muted">${c.examples.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>
       <div class="row"><button class="primary">Prepare submission for this journal</button>
-        ${c.homepage ? `<a href="${esc(c.homepage)}" target="_blank" rel="noopener">Journal website</a>` : ""}</div>`;
+        <button class="editMetrics">Enter metrics</button>
+        ${c.metrics_page ? `<a href="${esc(c.metrics_page)}" target="_blank" rel="noopener">Open metrics page</a>` : ""}
+        ${c.homepage ? `<a href="${esc(c.homepage)}" target="_blank" rel="noopener">Journal website</a>` : ""}</div>
+      <form class="metricsForm hidden">
+        <p class="muted">Type numbers you found on the journal's website (leave a box empty if not shown).
+          They're saved on this computer and used in every future run.</p>
+        <div class="grid">
+          <div class="field"><label>First decision (days)</label><input type="number" step="any" min="0" name="days_to_first_decision"></div>
+          <div class="field"><label>Acceptance rate (%)</label><input type="number" step="any" min="0" max="100" name="acceptance_rate"></div>
+          <div class="field"><label>Impact factor</label><input type="number" step="any" min="0" name="impact_factor"></div>
+          <div class="field"><label>CiteScore</label><input type="number" step="any" min="0" name="citescore"></div>
+        </div>
+        <div class="field"><label>Where you found it (optional)</label><input type="text" name="note" placeholder="e.g. journal website, Oct 2026"></div>
+        <div class="row"><button type="submit" class="primary">Save metrics</button><button type="button" class="cancel">Cancel</button>
+          <span class="muted saved"></span></div>
+      </form>`;
     el.querySelector("button").onclick = () => prepare(i, c.name);
+    const form = el.querySelector(".metricsForm");
+    const fields = ["days_to_first_decision", "acceptance_rate", "impact_factor", "citescore"];
+    el.querySelector(".editMetrics").onclick = () => {
+      fields.forEach(f => form.elements[f].value = m[f] ?? "");
+      form.classList.toggle("hidden");
+    };
+    form.querySelector(".cancel").onclick = () => form.classList.add("hidden");
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const values = Object.fromEntries(fields.map(f => [f, form.elements[f].value]));
+      try {
+        await api("/api/override", {issn: c.issn_key, values, note: form.elements.note.value});
+        fields.forEach(f => m[f] = values[f] === "" ? m[f] : +values[f]);
+        const chips = el.querySelector(".chips");
+        chips.innerHTML = `${chip("First decision", fmt(m.days_to_first_decision, " days"))}${chip("Acceptance", fmt(m.acceptance_rate, "%"))}${chip("Quality", m.quartile)}${m.impact_factor !== null ? chip("Impact factor", fmt(m.impact_factor)) : ""}${m.sjr !== null ? chip("SJR", fmt(m.sjr)) : ""}`;
+        form.querySelector(".saved").textContent = "Saved. Click 'Find journals' again to re-rank with your numbers.";
+      } catch (err) { alert(err.message); }
+    };
     box.appendChild(el);
   });
   $("excluded").innerHTML = r.excluded.map(x => `<li>${esc(x.name)} (${esc(x.publisher)}): ${esc(x.reason)}</li>`).join("");

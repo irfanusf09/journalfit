@@ -71,8 +71,6 @@ Next steps:
      Financial Services Marketing, Journal of Retailing and Consumer Services). They are
      probably genuine medians that include desk rejections.
    - Confirm the CiteScore year bug is gone (previously "citescore=2025").
-2. Offered to the owner and awaiting a yes: an "Enter metrics" button in the app to type
-   in numbers for blocked journals (Wiley and others). Those values would be stored in
-   `~/.journalfit/metrics_overrides.csv`, which already works.
+2. Done: "Enter metrics" button on each journal card (saves to `~/.journalfit/metrics_overrides.csv`), plus an "Open metrics page" link.
 3. Try the full flow (Prepare, then Open submission website, then Fill this page) on a
    real journal portal and fix the field matching where needed.

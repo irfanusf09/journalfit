@@ -357,3 +357,20 @@ def test_fetcher_rejects_stubs_wrong_pages_and_respects_blocks():
     assert f.get("https://forbidden", expect) is None
     assert f.get("https://botcheck", expect) is None
     assert remote_calls == ["https://other", "https://stub"]
+
+
+def test_save_override_adds_replaces_and_validates(tmp_path):
+    from journalfit.metrics.publishers import load_overrides, save_override
+
+    path = tmp_path / "o.csv"
+    save_override("1470-6423", {"days_to_first_decision": "30", "acceptance_rate": ""}, "site", path)
+    save_override("0022-2461", {"impact_factor": 4.5}, "", path)
+    save_override("14706423", {"acceptance_rate": "15"}, "editor", path)  # same journal, other ISSN format
+    data = load_overrides(path)
+    assert data["14706423"].acceptance_rate == 15 and data["14706423"].days_to_first_decision is None
+    assert data["00222461"].impact_factor == 4.5
+    assert "editor" in data["14706423"].sources["acceptance_rate"]
+    with pytest.raises(ValueError):
+        save_override("1470-6423", {"acceptance_rate": "150"}, "", path)
+    with pytest.raises(ValueError):
+        save_override("", {"acceptance_rate": "10"}, "", path)

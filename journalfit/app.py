@@ -142,6 +142,8 @@ def run_find(job: Job, body: dict) -> dict:
 
 
 def _cand_json(c) -> dict:
+    from .metrics.publishers import candidate_urls
+
     j, m = c.journal, c.journal.metrics
     return {
         "name": j.name, "publisher": j.publisher, "issn": ", ".join(j.issns), "homepage": j.homepage,
@@ -149,6 +151,8 @@ def _cand_json(c) -> dict:
         "scope_reason": c.scope_reason, "matched": c.matched_works, "refs": c.reference_hits,
         "warnings": c.warnings, "examples": c.example_titles[:4], "metrics": asdict(m),
         "open_access": j.is_oa or j.in_doaj,
+        "metrics_page": next(iter(candidate_urls(j)), j.homepage),
+        "issn_key": j.issns[0] if j.issns else "",
     }
 
 
@@ -420,6 +424,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if u.path == "/api/assist/stop":
                 ASSISTANT.q.put(("stop", None))
+                return self._json({"ok": True})
+            if u.path == "/api/override":
+                from .metrics.publishers import save_override
+
+                save_override(body.get("issn", ""), body.get("values") or {}, body.get("note", ""))
                 return self._json({"ok": True})
             if u.path == "/api/update":
                 return self._json({"message": run_update()})

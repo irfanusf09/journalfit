@@ -77,6 +77,25 @@ def test_click_through(server):
         assert "1. Carbon" in first and "28 days" in first
         assert "Batteries" in page.text_content("#excluded")  # open access excluded
 
+        # Enter metrics for the 2nd journal (its publisher page shows no acceptance rate).
+        second = page.locator("#results .journal").nth(1)
+        assert "Journal of Materials Science" in second.inner_text()
+        second.locator(".editMetrics").click()
+        assert second.locator("input[name=days_to_first_decision]").input_value() == "30"  # prefilled
+        second.locator("input[name=acceptance_rate]").fill("22")
+        second.locator("input[name=note]").fill("journal website")
+        second.locator("text=Save metrics").click()
+        page.wait_for_selector("text=Saved. Click 'Find journals' again")
+        assert "Acceptance: 22%" in second.inner_text()
+        saved = (tmp / "data" / "none.csv").read_text()
+        assert "0022-2461" in saved and ",22," in saved and "journal website" in saved
+
+        # A new run uses the saved number.
+        page.evaluate("document.querySelectorAll('#results .journal').forEach(e => e.dataset.old = '1')")
+        page.click("#findBtn")
+        page.wait_for_selector("#results .journal:not([data-old]) >> nth=1", timeout=20000)
+        assert "Acceptance: 22%" in page.locator("#results .journal").nth(1).inner_text()
+
         page.click("#results .journal >> nth=0 >> text=Prepare submission for this journal")
         page.wait_for_selector("#pkgBody:not(.hidden)", timeout=20000)
         assert "Submission checklist" in page.inner_text("#checklist")

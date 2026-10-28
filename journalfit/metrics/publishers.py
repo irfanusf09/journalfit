@@ -305,3 +305,41 @@ def load_overrides(path=None) -> dict[str, Metrics]:
                     m.sources[name] = "override: " + (row.get("note") or str(path))
             out[issn] = m
     return out
+
+
+OVERRIDE_FIELDS = ("days_to_first_decision", "acceptance_rate", "impact_factor", "citescore")
+
+
+def save_override(issn: str, values: dict, note: str = "", path=None) -> None:
+    """Add or replace the user's own metrics for one journal (keyed by ISSN)."""
+    from ..sources.indexing import norm_issn
+
+    path = path or config.OVERRIDES_PATH
+    key = norm_issn(issn)
+    if not key:
+        raise ValueError("This journal has no ISSN, so its metrics can't be saved.")
+    clean = {}
+    for name in OVERRIDE_FIELDS:
+        v = values.get(name)
+        if v in (None, ""):
+            continue
+        try:
+            num = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"'{v}' is not a number")
+        if num < 0 or (name == "acceptance_rate" and num > 100):
+            raise ValueError(f"{name.replace('_', ' ')} must be between 0 and 100" if name == "acceptance_rate"
+                             else f"{name.replace('_', ' ')} can't be negative")
+        clean[name] = f"{num:g}"
+    rows = []
+    if path.exists():
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = [r for r in csv.DictReader(f) if norm_issn(r.get("issn", "")) != key]
+    if clean:
+        rows.append({"issn": issn, **clean, "note": note.strip() or "entered by you"})
+    config.ensure_data_dir()
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["issn", *OVERRIDE_FIELDS, "note"])
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in w.fieldnames})
