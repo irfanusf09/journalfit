@@ -236,8 +236,13 @@ class LLM:
             text = self.with_web(system, head + ask, effort="low")
         else:
             pages = dict(pages or {})
-            pages.update(self.web_pages(
-                f"{j.name} journal submission to first decision acceptance rate", j, limit=2, skip=set(pages)))
+            pub = re.split(r"[\s,(]", (j.publisher or "").strip())[0]
+            for query in (f"{j.name} {pub} journal metrics submission to first decision",
+                          f"{j.name} {pub} about the journal insights"):
+                found = self.web_pages(query, j, limit=2, skip=set(pages))
+                pages.update(found)
+                if found:
+                    break
             if not pages:
                 return Metrics()
             docs = "\n\n".join(f"<page url=\"{u}\">\n{t[:15000]}\n</page>" for u, t in pages.items())

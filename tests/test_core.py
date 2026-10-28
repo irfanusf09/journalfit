@@ -86,6 +86,10 @@ Text here.
     ("First decision: 17.3 days (median values for papers published in this journal)", "days_to_first_decision", 17.3),
     ("Time to first decision 2 months", "days_to_first_decision", 60.8),
     ("Our acceptance rate is low", "acceptance_rate", None),
+    ("CiteScore 2025: 9.8 Downloads 120,000", "citescore", 9.8),
+    ("Journal Impact Factor (2024) 5.2 Submission to first decision (median) 9 days", "impact_factor", 5.2),
+    ("Impact Factor 2024 6.3", "impact_factor", 6.3),
+    ("Impact factor 4.9 (2024)", "impact_factor", 4.9),
 ])
 def test_extract_metrics(text, field, expected):
     assert getattr(extract_metrics(text, "u"), field) == expected
@@ -112,6 +116,12 @@ def test_scimago_parse_and_annotate():
     assert j2.scopus_indexed is False
 
 
+def test_metric_evidence_is_recorded():
+    ev = {}
+    extract_metrics("Journal metrics. Submission to first decision (median) 21 days. More text.", "u", ev)
+    assert ev["days_to_first_decision"] == "Submission to first decision (median) 21 days"
+
+
 def test_publisher_urls():
     j = Journal("S1", "Carbon", publisher="Elsevier BV", homepage="https://www.sciencedirect.com/journal/carbon")
     assert candidate_urls(j)[0] == "https://www.sciencedirect.com/journal/carbon/about/insights"
@@ -120,6 +130,8 @@ def test_publisher_urls():
     assert "https://link.springer.com/journal/10853" in candidate_urls(j)
     j = Journal("S3", "Mat Res Lett", publisher="Taylor & Francis", homepage="https://www.tandfonline.com/toc/tmrl20/current")
     assert "journalCode=tmrl20" in candidate_urls(j)[0]
+    j = Journal("S4", "Nature Human Behaviour", publisher="Nature Portfolio", homepage="https://www.nature.com/nathumbehav/")
+    assert candidate_urls(j)[0] == "https://www.nature.com/nathumbehav/journal-impact"
 
 
 def _cand(**m):

@@ -174,7 +174,7 @@ def test_deepseek_without_any_pages_makes_no_model_call(monkeypatch):
     post = RoutedPost({DeepSeek.SEARCH_URL: {"results": []}})
     monkeypatch.setattr(llm_mod.requests, "post", post)
     assert DeepSeek("deepseek-flash", "k").lookup_metrics(Journal("S", "J")).days_to_first_decision is None
-    assert [c["url"] for c in post.calls] == [DeepSeek.SEARCH_URL]
+    assert [c["url"] for c in post.calls] == [DeepSeek.SEARCH_URL, DeepSeek.SEARCH_URL]  # two queries, no model call
 
 
 def test_deepseek_guidelines_found_by_search(monkeypatch):

@@ -65,12 +65,18 @@ def mdpi_urls(j: Journal) -> list[str]:
     return [f"https://www.mdpi.com/journal/{slug}", f"https://www.mdpi.com/journal/{slug}/stats"]
 
 
+def nature_urls(j: Journal) -> list[str]:
+    home = j.homepage.split("?")[0].rstrip("/")
+    return [home + "/journal-impact", home] if "nature.com/" in home else homepage_urls(j)
+
+
 def homepage_urls(j: Journal) -> list[str]:
     return [j.homepage] if j.homepage else []
 
 
 ADAPTERS: list[tuple[re.Pattern, Callable[[Journal], list[str]]]] = [
     (re.compile(r"elsevier|cell press", re.I), elsevier_urls),
+    (re.compile(r"nature portfolio|nature\.com", re.I), nature_urls),
     (re.compile(r"springer|nature|bmc|palgrave", re.I), springer_urls),
     (re.compile(r"taylor|francis|routledge", re.I), tandf_urls),
     (re.compile(r"wiley|hindawi", re.I), wiley_urls),
@@ -208,10 +214,13 @@ def scrape_metrics(j: Journal, fetcher: PageFetcher) -> tuple[Metrics, dict[str,
         if not html:
             continue
         pages[url] = page_text(html)
-        got = extract_metrics(pages[url], url)
+        evidence: dict[str, str] = {}
+        got = extract_metrics(pages[url], url, evidence)
         found.merge(got)
         hits = {k: v for k, v in got.sources.items()}
         trace.note(f"    metrics on page: {', '.join(f'{k}={getattr(got, k)}' for k in hits) or 'none'}")
+        for k in hits:
+            trace.note(f"      {k} from: \"{evidence.get(k, '')[:160]}\"")
         if not hits:
             for snip in trace.snippets(pages[url]):
                 trace.note(f"      {snip}")
