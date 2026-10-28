@@ -292,3 +292,12 @@ def test_ai_lookup_limited_and_cached(tmp_path, monkeypatch):
     again = [Candidate(journal=Journal("X0", "J0"))]
     f.collect_metrics(again, Criteria(), web_lookup=True, lookup_top=2)
     assert llm.calls == ["J0", "J1"] and again[0].journal.metrics.days_to_first_decision == 40  # from cache
+
+
+def test_cache_keeps_only_real_findings(tmp_path):
+    from journalfit.finder import MetricCache
+
+    c = MetricCache(tmp_path / "c.json")
+    c.put("empty", Metrics())
+    c.put("full", Metrics(acceptance_rate=20.0, sources={"acceptance_rate": "x"}))
+    assert c.get("empty") is None and c.get("full").acceptance_rate == 20

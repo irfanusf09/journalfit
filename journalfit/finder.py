@@ -177,7 +177,8 @@ class Finder:
                 try:
                     found = self.llm.lookup_metrics(j, pages)
                     j.metrics.merge(found)
-                    cache.put(j.openalex_id, found)
+                    if found.sources:  # remember only real findings; "nothing found" is retried next run
+                        cache.put(j.openalex_id, found)
                     trace.note(f"    AI lookup: {', '.join(f'{k}={getattr(found, k)}' for k in found.sources) or 'nothing found'}")
                 except Exception as e:  # a failed lookup leaves the metric unknown, never guessed
                     c.warnings.append(f"metric lookup failed: {e}")
@@ -268,7 +269,8 @@ class MetricCache:
         row = self.data.get(key)
         if not row or time.time() - row["ts"] > self.TTL:
             return None
-        return Metrics(**row["metrics"])
+        m = Metrics(**row["metrics"])
+        return m if m.sources else None  # ignore empty entries saved by older versions
 
     def put(self, key: str, m: Metrics) -> None:
         self.data[key] = {"ts": time.time(), "metrics": asdict(m)}
