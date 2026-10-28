@@ -191,7 +191,29 @@ def cmd_data(a):
     config.ensure_data_dir()
     if a.action == "update":
         console.print("Downloading SCImago journal list (Scopus-based SJR and quartiles)...")
-        HttpClient().download(SCIMAGO_URL, config.SCIMAGO_PATH)
+        tmp = config.SCIMAGO_PATH.with_suffix(".download")
+        try:
+            HttpClient().download(SCIMAGO_URL, tmp)
+            if not _is_scimago_csv(tmp):
+                raise RuntimeError("got a web page instead of the data file")
+        except Exception as e:
+            _log(f"  direct download blocked ({e}); retrying with a browser...")
+            try:
+                _download_scimago_with_browser(tmp)
+            except Exception as e2:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Could not download the SCImago list automatically ({e2}).\n"
+                    "Download it yourself: open https://www.scimagojr.com/journalrank.php, click "
+                    "'Download data', then run:\n  journalfit data import-scimago ~/Downloads/scimagojr*.csv"
+                )
+        tmp.replace(config.SCIMAGO_PATH)
+    elif a.action == "import-scimago":
+        if not a.file or not _is_scimago_csv(Path(a.file)):
+            raise SystemExit("Usage: journalfit data import-scimago PATH_TO_scimagojr.csv (the file from 'Download data')")
+        import shutil
+
+        shutil.copy2(a.file, config.SCIMAGO_PATH)
     elif a.action == "import-scopus":
         if not a.file:
             raise SystemExit("Usage: journalfit data import-scopus PATH_TO_SCOPUS_SOURCE_LIST.xlsx")
@@ -205,6 +227,33 @@ def cmd_data(a):
                   + ("" if idx.scopus else "  (optional; adds discontinued-title checks and CiteScore)"))
     console.print(f"  Metric overrides file: {config.OVERRIDES_PATH} "
                   f"({'present' if config.OVERRIDES_PATH.exists() else 'not created'})")
+
+
+def _is_scimago_csv(path: Path) -> bool:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(500)
+    except OSError:
+        return False
+    return head.lstrip("﻿").startswith("Rank;") and "Issn" in head
+
+
+def _download_scimago_with_browser(dest: Path) -> None:
+    """SCImago blocks scripted downloads; a real browser clicking 'Download data' works."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=False)  # visible: bot checks often block headless
+        try:
+            page = browser.new_page()
+            page.goto("https://www.scimagojr.com/journalrank.php", timeout=60000)
+            with page.expect_download(timeout=120000) as dl:
+                page.get_by_text("Download data").first.click(timeout=60000)
+            dl.value.save_as(str(dest))
+        finally:
+            browser.close()
+    if not _is_scimago_csv(dest):
+        raise RuntimeError("downloaded file is not the SCImago CSV")
 
 
 def main(argv=None):
@@ -240,7 +289,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_assist)
 
     d = sub.add_parser("data", help="download or import journal indexing data")
-    d.add_argument("action", choices=["update", "import-scopus", "status"])
+    d.add_argument("action", choices=["update", "import-scimago", "import-scopus", "status"])
     d.add_argument("file", nargs="?")
     d.set_defaults(fn=cmd_data)
 

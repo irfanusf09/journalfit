@@ -34,8 +34,10 @@ pip install -e '.[browser]'
 playwright install chromium
 export ANTHROPIC_API_KEY=sk-ant-...      # for the Claude features (or use --no-llm)
 export JOURNALFIT_EMAIL=you@university.edu   # optional: OpenAlex polite pool (faster, more reliable)
-journalfit data update                    # downloads the SCImago/Scopus journal list
+journalfit data update                    # downloads the SCImago/Scopus journal list (see below if blocked)
 ```
+
+If `data update` is blocked, open https://www.scimagojr.com/journalrank.php in your browser, click **Download data**, then run `journalfit data import-scimago ~/Downloads/scimagojr*.csv`.
 
 Optional: download Elsevier's free **Scopus Source List** (.xlsx) from the [Scopus content page](https://www.elsevier.com/products/scopus/content/content-policy-and-selection) and run `journalfit data import-scopus scopus.xlsx`. This adds checks for discontinued titles, plus CiteScore.
 
