@@ -91,3 +91,101 @@ def test_fill_page(tmp_path):
     assert vals["other_title"] == "keep me"  # never overwrites
     assert uploads == ["manuscript.docx", "cover_letter.docx", "a.csv", "b.pdf,c.mp4"]
     assert n == 8
+
+
+MODERN_FORM = """
+<html><body>
+<div class="step"><h2>Manuscript details</h2>
+  <div class="row"><div class="lbl">Article type</div>
+    <div><select><option>Please select</option><option>Review Article</option>
+      <option>Original Research Article</option><option>Letter</option></select></div></div>
+  <div class="row"><div class="lbl">Full title</div><div><div class="wrap"><input type="text"></div></div></div>
+  <div class="row"><div class="lbl">Abstract</div>
+    <div><div class="toolbar">B I U</div><div class="editor" contenteditable="true"></div></div></div>
+  <div class="row"><span>Keywords (separate with semicolons)</span><input type="text"></div>
+  <div class="row"><div class="lbl">Corresponding author email</div><input type="text"></div>
+  <div class="row"><div class="lbl">Main document</div>
+    <div class="dropzone">Drag files here<input type="file" style="display:none"></div></div>
+  <x-field></x-field>
+</div>
+<script>
+customElements.define('x-field', class extends HTMLElement {
+  constructor() { super(); const r = this.attachShadow({mode: 'open'});
+    r.innerHTML = '<label>Running title <input type="text" id="rt"></label>'; }
+});
+</script>
+</body></html>
+"""
+
+
+def _pkg(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "manuscript.docx").write_bytes(b"x")
+    (pkg / "metadata.json").write_text(json.dumps({
+        "journal": "J", "title": "Does connectivity flatten tourism's carbon slope? A tourism-dependence test",
+        "abstract": "We study 185 countries.", "keywords": ["tourism", "CO2", "internet"],
+        "article_type": "original research"}))
+    return pkg
+
+
+def test_modern_form_is_filled(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    from journalfit.submit.assistant import page_signature
+
+    plan, _ = load_plan(_pkg(tmp_path))
+    report = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page()
+        page.set_content(MODERN_FORM)
+        page.wait_for_timeout(200)
+        sig_before = page_signature(page)
+        n = fill_page(page, plan, log=lambda *_: None, report=report)
+        title = page.input_value(".row:nth-of-type(2) input")
+        abstract = page.inner_text(".editor")
+        keywords = page.locator("span + input").input_value()
+        email = page.locator(".row:nth-of-type(5) input").input_value()
+        article = page.eval_on_selector("select", "s => s.options[s.selectedIndex].text")
+        running = page.evaluate("document.querySelector('x-field').shadowRoot.querySelector('#rt').value")
+        upload = page.evaluate("document.querySelector('input[type=file]').files[0]?.name")
+        page.evaluate("document.querySelector('.step').insertAdjacentHTML('beforeend', '<textarea></textarea>')")
+        sig_after = page_signature(page)
+        browser.close()
+
+    assert title.startswith("Does connectivity flatten")
+    assert abstract == "We study 185 countries."
+    assert keywords == "tourism; CO2; internet"
+    assert email == ""  # person field untouched
+    assert article == "Original Research Article"
+    assert running == "Does connectivity flatten tourism's carbon slope?"
+    assert upload == "manuscript.docx"
+    assert n == 6
+    assert any("[filled abstract] richtext" in line for line in report)
+    assert sig_before != sig_after  # a changed page is noticed for automatic filling
+
+
+def test_uploaded_files_are_not_repeated_in_auto_mode(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    plan, _ = load_plan(_pkg(tmp_path))
+    uploaded = set()
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page()
+        page.set_content('<div>Main document</div><input type="file">')
+        assert fill_page(page, plan, log=lambda *_: None, uploaded=uploaded) == 1
+        page.set_content('<div>Main document</div><input type="file">')
+        assert fill_page(page, plan, log=lambda *_: None, uploaded=uploaded) == 0
+        browser.close()
+
+
+def test_pick_article_type():
+    from journalfit.submit.assistant import pick_article_type
+
+    opts = ["-- Select --", "Book Review", "Review Article", "Original Paper", "Short Communication"]
+    assert pick_article_type(opts, "original research") == "Original Paper"
+    assert pick_article_type(opts, "systematic review") == "Review Article"
+    assert pick_article_type(["Select", "Article", "Letter"], "original research") == "Article"
+    assert pick_article_type(["Select", "Letter", "Editorial"], "original research") is None

@@ -189,15 +189,18 @@
     <h2><span class="step">5</span> Fill in the journal's submission website</h2>
     <ol class="muted">
       <li>Click <b>Open submission website</b>. A browser window opens. Log in (only needed the first time).</li>
-      <li>Start a new submission there. On each form page, come back here and click <b>Fill this page</b>.</li>
-      <li>Check every page yourself. <b>This tool never clicks any button.</b> Only you can press Submit.</li>
+      <li>Start a new submission there. <b>Each form page is filled automatically</b> when it appears
+        (title, abstract, keywords, article type, files). Check it, then click the site's Next/Continue.</li>
+      <li><b>This tool never clicks any button</b>, so only you can press Submit.</li>
     </ol>
+    <label class="check"><input type="checkbox" id="autoFill" checked>
+      <span>Fill each page automatically <span class="muted">(untick to fill only when you click "Fill this page")</span></span></label>
     <div class="field"><label for="subUrl">Submission website</label>
       <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/...">
       <span class="muted" id="subHint"></span></div>
     <div class="row">
       <button class="primary" id="openSiteBtn">Open submission website</button>
-      <button id="fillBtn" disabled>Fill this page</button>
+      <button id="fillBtn" disabled>Fill this page again</button>
       <button id="closeSiteBtn" disabled>Close browser</button>
     </div>
     <div class="log hidden" id="assistLog" style="margin-top:14px"></div>
@@ -460,6 +463,7 @@ $("openSiteBtn").onclick = async () => {
     setTimeout(pollAssist, 1500);
   } catch (e) { alert(e.message); }
 };
+$("autoFill").onchange = async () => { try { await api("/api/assist/auto", {on: $("autoFill").checked}); } catch (e) {} };
 $("fillBtn").onclick = async () => { try { await api("/api/assist/fill", {}); } catch (e) { alert(e.message); } };
 $("closeSiteBtn").onclick = async () => { await api("/api/assist/stop", {}); };
 

@@ -23,36 +23,67 @@ COLLECT_JS = r"""
 (startIdx) => {
   const out = [];
   let idx = startIdx;
-  const labelFor = (el) => {
-    const bits = [];
-    if (el.id) {
-      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (l) bits.push(l.innerText);
-    }
-    const wrap = el.closest('label'); if (wrap) bits.push(wrap.innerText);
-    for (const a of ['aria-label', 'placeholder', 'name', 'id', 'title']) {
-      if (el.getAttribute(a)) bits.push(el.getAttribute(a));
-    }
-    const lb = el.getAttribute('aria-labelledby');
-    if (lb) lb.split(/\s+/).forEach(id => { const n = document.getElementById(id); if (n) bits.push(n.innerText); });
-    // Table-based forms (ScholarOne, Editorial Manager): text of the row / previous cell.
-    const cell = el.closest('td, div.form-group, div.field, li');
-    if (cell) {
-      const prev = cell.previousElementSibling; if (prev) bits.push(prev.innerText.slice(0, 200));
-      const row = cell.closest('tr'); if (row) bits.push(row.innerText.slice(0, 200));
-    }
-    return bits.join(' | ').replace(/\s+/g, ' ').trim();
+  const txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const visible = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   };
-  document.querySelectorAll('input, textarea').forEach(el => {
-    const type = (el.getAttribute('type') || el.tagName).toLowerCase();
-    if (['hidden', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio', 'password'].includes(type)) return;
-    if (el.disabled || el.readOnly) return;
-    const r = el.getBoundingClientRect();
-    if (type !== 'file' && (r.width === 0 || r.height === 0)) return;
+  const rootOf = (el) => el.getRootNode();
+  const byId = (el, id) => {
+    const r = rootOf(el);
+    return (r.getElementById && r.getElementById(id)) || document.getElementById(id);
+  };
+  // Label texts, nearest first: explicit labels and attributes, then text just before the
+  // field, walking up through the page structure (modern forms put labels in nearby blocks).
+  const labelsFor = (el) => {
+    const bits = [];
+    const add = (t) => { t = (t || '').replace(/\s+/g, ' ').trim(); if (t) bits.push(t.slice(0, 200)); };
+    if (el.id) {
+      const r = rootOf(el);
+      const l = r.querySelector && r.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l) add(txt(l));
+    }
+    const wrap = el.closest('label'); if (wrap) add(txt(wrap));
+    for (const a of ['aria-label', 'placeholder', 'data-placeholder', 'title', 'name', 'id', 'data-testid']) add(el.getAttribute(a));
+    for (const a of ['aria-labelledby', 'aria-describedby']) {
+      const v = el.getAttribute(a);
+      if (v) v.split(/\s+/).forEach(id => { const n = byId(el, id); if (n) add(txt(n)); });
+    }
+    const fs = el.closest('fieldset'); if (fs) { const lg = fs.querySelector('legend'); if (lg) add(txt(lg)); }
+    let node = el;
+    for (let depth = 0; depth < 6 && node; depth++) {
+      let sib = node.previousElementSibling, hops = 0;
+      while (sib && hops < 3) {
+        if (!sib.matches('input, textarea, select') && txt(sib)) { add(txt(sib).slice(0, 160)); break; }
+        sib = sib.previousElementSibling; hops++;
+      }
+      if (node.tagName === 'TD') { const row = node.closest('tr'); if (row) add(txt(row)); }
+      node = node.parentElement || (rootOf(node) && rootOf(node).host) || null;
+    }
+    return bits;
+  };
+  const all = [];
+  const walk = (r) => {
+    r.querySelectorAll('input, textarea, select, [contenteditable="true"], [contenteditable=""]').forEach(e => all.push(e));
+    r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
+  };
+  walk(document);
+  for (const el of all) {
+    const tag = el.tagName.toLowerCase();
+    const rich = el.isContentEditable && tag !== 'input' && tag !== 'textarea';
+    if (rich && el.parentElement && el.parentElement.closest('[contenteditable="true"]')) continue;
+    const type = rich ? 'richtext' : tag === 'select' ? 'select' : (el.getAttribute('type') || tag).toLowerCase();
+    if (['hidden', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio', 'password', 'search'].includes(type)) continue;
+    if (el.disabled || el.readOnly) continue;
+    if (type !== 'file' && !visible(el)) continue;
     el.setAttribute('data-jf-idx', String(idx));
-    out.push({idx: idx++, type, tag: el.tagName.toLowerCase(), label: labelFor(el), value: el.value || '',
-              multiple: !!el.multiple});
-  });
+    let value = el.value || '';
+    if (rich) value = txt(el);
+    if (tag === 'select') value = el.selectedIndex > 0 ? txt(el.options[el.selectedIndex]) : '';
+    const bits = labelsFor(el);
+    out.push({idx: idx++, type, tag, bits, label: bits.join(' | '), value, multiple: !!el.multiple,
+              options: tag === 'select' ? [...el.options].map(o => txt(o)) : []});
+  }
   return out;
 }
 """
@@ -64,6 +95,7 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
     ("abstract", re.compile(r"\babstract\b", re.I)),
     ("keywords", re.compile(r"key[\s_-]*words?|index terms", re.I)),
     ("cover_letter", re.compile(r"cover[\s_-]*letter|comments?\s+to\s+(the\s+)?editor", re.I)),
+    ("article_type", re.compile(r"(article|manuscript|submission|paper)[\s_-]*type|type\s+of\s+(article|manuscript|paper|submission)", re.I)),
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
     ("cover_letter_file", re.compile(r"cover[\s_-]*letter", re.I)),
@@ -80,16 +112,26 @@ class Plan:
     supplements: list[str] = field(default_factory=list)
 
 
+def running_title(title: str) -> str:
+    """Short title: the part before a colon or question mark if that reads well, else the first 8 words."""
+    if len(title) <= 60:
+        return title
+    m = re.match(r"(.{15,70}?[?:])\s", title)
+    if m:
+        return m.group(1).rstrip(":").strip()
+    return " ".join(title.split()[:8])
+
+
 def load_plan(package_dir: Path) -> tuple[Plan, dict]:
     meta = json.loads((package_dir / "metadata.json").read_text(encoding="utf-8"))
     cover_txt = package_dir / "cover_letter.txt"
-    words = meta["title"].split()
     values = {
         "title": meta["title"],
-        "running_title": " ".join(words[:8]) if len(meta["title"]) > 60 else meta["title"],
+        "running_title": running_title(meta["title"]),
         "abstract": meta["abstract"],
         "keywords": "; ".join(meta["keywords"]),
         "cover_letter": cover_txt.read_text(encoding="utf-8") if cover_txt.exists() else "",
+        "article_type": meta.get("article_type") or "original research",
     }
     manuscript = next(package_dir.glob("manuscript.*"), None)
     files = {
@@ -106,18 +148,45 @@ PERSON_FIELD = re.compile(r"author|salutation|prefix|honorific|first[\s_-]*name|
 
 
 def match_field(label: str, is_file: bool) -> str | None:
-    if not is_file and PERSON_FIELD.search(label):
-        return None
-    for key, rx in (FILE_RULES if is_file else FIELD_RULES):
-        if rx.search(label):
-            return key
+    return match_bits([label], is_file)
+
+
+def match_bits(bits: list[str], is_file: bool) -> str | None:
+    """The nearest label text decides: a field's own label beats text further away on the page."""
+    for bit in bits:
+        if not is_file and PERSON_FIELD.search(bit):
+            return None
+        for key, rx in (FILE_RULES if is_file else FIELD_RULES):
+            if rx.search(bit):
+                return key
     return None
 
 
-def fill_page(page, plan: Plan, log=print) -> int:
+BAD_TYPES = re.compile(r"review|letter|editorial|comment|short|brief|erratum|correction|book|perspective|case", re.I)
+
+
+def pick_article_type(options: list[str], article_type: str) -> str | None:
+    """Choose the drop-down option matching the manuscript's article type, or None if unclear."""
+    want_review = bool(re.search(r"review", article_type, re.I))
+    choices = [o for o in options if o and not re.match(r"^(please\s+)?(select|choose|--)", o, re.I)]
+    if want_review:
+        hits = [o for o in choices if re.search(r"review", o, re.I) and not re.search(r"book", o, re.I)]
+    else:
+        hits = [o for o in choices if re.search(r"original|research", o, re.I) and not BAD_TYPES.search(o)]
+        hits = hits or [o for o in choices if re.fullmatch(r"\s*(full[\s-]*length\s+)?article\s*", o, re.I)]
+    return hits[0] if len(hits) >= 1 else None
+
+
+def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: list | None = None) -> int:
+    """Fill every recognised field on the current page. Never clicks buttons.
+
+    `uploaded` remembers files already uploaded in this session (so automatic filling doesn't
+    upload them again); `report` receives one line per field seen, for troubleshooting.
+    """
     filled = 0
-    used_files: set[str] = set()
+    used_files: set[str] = uploaded if uploaded is not None else set()
     saw_file_input = False
+    supplements_done = False
     idx = 0
     for frame in page.frames:
         try:
@@ -128,43 +197,99 @@ def fill_page(page, plan: Plan, log=print) -> int:
         for f in fields:
             is_file = f["type"] == "file"
             saw_file_input |= is_file
-            key = match_field(f["label"], is_file)
-            if not key:
-                continue
+            key = match_bits(f.get("bits") or [f["label"]], is_file)
+            action = "not recognised"
             loc = frame.locator(f'[data-jf-idx="{f["idx"]}"]')
             try:
-                if is_file and key == "supplementary_file":
+                if not key:
+                    pass
+                elif is_file and key == "supplementary_file":
                     left = [p for p in plan.supplements if p not in used_files]
-                    if not left:
-                        continue
-                    batch = left if f.get("multiple") else left[:1]
-                    loc.set_input_files(batch)
-                    used_files.update(batch)
-                    log(f"  uploaded {', '.join(Path(p).name for p in batch)}  ->  {f['label'][:70]}")
+                    if left:
+                        batch = left if f.get("multiple") else left[:1]
+                        loc.set_input_files(batch)
+                        used_files.update(batch)
+                        supplements_done = True
+                        action = "uploaded " + ", ".join(Path(p).name for p in batch)
+                    else:
+                        action = "supplementary already uploaded"
                 elif is_file:
                     path = plan.files.get(key)
-                    if not path or path in used_files:
-                        continue
-                    loc.set_input_files(path)
-                    used_files.add(path)
-                    log(f"  uploaded {Path(path).name}  ->  {f['label'][:70]}")
+                    if path and path not in used_files:
+                        loc.set_input_files(path)
+                        used_files.add(path)
+                        action = f"uploaded {Path(path).name}"
+                    else:
+                        action = "file already uploaded" if path else "no file for it"
+                elif f["value"].strip():
+                    action = "already has a value (left unchanged)"
+                elif key == "article_type":
+                    if f["type"] != "select":
+                        action = "article type is not a list (left for you)"
+                    else:
+                        choice = pick_article_type(f.get("options") or [], plan.values.get("article_type", ""))
+                        if choice:
+                            loc.select_option(label=choice)
+                            action = f"selected '{choice}'"
+                        else:
+                            action = "article type unclear (left for you)"
+                elif f["type"] == "select":
+                    action = "list (left for you)"
                 else:
                     value = plan.values.get(key)
-                    if not value or f["value"].strip():
-                        continue  # never overwrite what is already there
-                    if key == "abstract" and f["tag"] != "textarea":
-                        continue
-                    loc.fill(value)
-                    log(f"  filled {key:<13} ->  {f['label'][:70]}")
-                filled += 1
+                    if not value:
+                        action = "nothing to put here"
+                    elif key == "abstract" and f["type"] not in ("textarea", "richtext"):
+                        action = "abstract box is a one-line field (left for you)"
+                    elif f["type"] == "richtext":
+                        loc.click()
+                        frame.page.keyboard.insert_text(value)
+                        action = f"filled {key}"
+                    else:
+                        loc.fill(value)
+                        action = f"filled {key}"
+                if action.startswith(("filled", "uploaded", "selected")):
+                    filled += 1
+                    log(f"  {action}  ->  {f['label'][:70]}")
             except Exception as e:
+                action = f"failed: {e}"
                 log(f"  could not fill {key}: {e}")
-    if saw_file_input and plan.supplements and not any(p in used_files for p in plan.supplements):
+            if report is not None:
+                report.append(f"  [{action}] {f['type']} | {f['label'][:220]}")
+    if saw_file_input and plan.supplements and not supplements_done and \
+            not all(p in used_files for p in plan.supplements):
         folder = Path(plan.supplements[0]).parent
         log(f"  Supplementary files were not uploaded: this page has no field labelled 'supplementary'. "
             f"If the site uses one upload box with a 'file type' list, upload them there yourself "
             f"from {folder} and choose 'Supplementary material'.")
     return filled
+
+
+PAGE_SIGNATURE_JS = """() => {
+  let n = 0;
+  const walk = (r) => { n += r.querySelectorAll('input, textarea, select, [contenteditable]').length;
+                        r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); }); };
+  walk(document);
+  return location.href.split('#')[0] + ' ' + n;
+}"""
+
+
+def page_signature(page) -> str:
+    """Changes when the site shows a different form page (new address or different set of fields)."""
+    parts = []
+    for frame in page.frames:
+        try:
+            parts.append(frame.evaluate(PAGE_SIGNATURE_JS))
+        except Exception:
+            continue
+    return "|".join(parts)
+
+
+def write_report(package_dir: Path, url: str, lines: list[str]) -> None:
+    import datetime as dt
+
+    with open(package_dir / "form_report.txt", "a", encoding="utf-8") as f:
+        f.write(f"\n== {dt.datetime.now():%H:%M:%S} {url}\n" + "\n".join(lines) + "\n")
 
 
 def run(package_dir: Path, url: str | None = None) -> None:

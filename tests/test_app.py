@@ -142,3 +142,41 @@ def test_api_requires_token(server):
     assert e.value.code == 403
     req = urllib.request.Request(url + "api/state", headers={"X-Token": app.TOKEN})
     assert "data" in json.loads(urllib.request.urlopen(req).read())
+
+
+def test_assistant_fills_each_new_page_automatically(tmp_path, monkeypatch):
+    import json
+    import time
+
+    monkeypatch.setenv("JOURNALFIT_HEADLESS", "1")
+    monkeypatch.setattr(config, "BROWSER_PROFILE", tmp_path / "profile")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "manuscript.docx").write_bytes(b"x")
+    (pkg / "metadata.json").write_text(json.dumps({
+        "journal": "J", "title": "Tourism and carbon", "abstract": "We study things.", "keywords": ["a", "b"]}))
+    step1 = tmp_path / "step1.html"
+    step1.write_text('<div>Title</div><input type="text" id="t">')
+    step2 = tmp_path / "step2.html"
+    step2.write_text('<div>Abstract</div><textarea id="a"></textarea>')
+
+    a = app.Assistant()
+    a.start(str(pkg), step1.as_uri())
+
+    def wait_for(text, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            if any(text in line for line in a.log):
+                return True
+            time.sleep(0.3)
+        return False
+
+    try:
+        assert wait_for("filled title"), a.log
+        a.q.put(("goto", step2.as_uri()))  # stands in for the user clicking "Next"
+        assert wait_for("filled abstract"), a.log
+    finally:
+        a.q.put(("stop", None))
+        a.thread.join(timeout=20)
+    report = (pkg / "form_report.txt").read_text()
+    assert "step1.html" in report and "[filled abstract] textarea" in report

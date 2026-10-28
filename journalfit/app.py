@@ -204,6 +204,7 @@ class Assistant:
         self.q: queue.Queue = queue.Queue()
         self.log: list[str] = []
         self.active = False
+        self.auto = True  # fill each new form page automatically
         self.thread: threading.Thread | None = None
 
     def start(self, package: str, url: str) -> None:
@@ -219,28 +220,57 @@ class Assistant:
         try:
             from playwright.sync_api import sync_playwright
 
-            from .submit.assistant import fill_page, load_plan
+            from .submit.assistant import fill_page, load_plan, page_signature, write_report
 
             plan, _ = load_plan(package)
+            uploaded: set[str] = set()  # files already uploaded in this session
             config.ensure_data_dir()
+
+            def fill(page, manual: bool) -> None:
+                report: list[str] = []
+                n = fill_page(page, plan, log=self.log.append,
+                              uploaded=set() if manual else uploaded, report=report)
+                write_report(package, page.url, report)
+                if n or manual:
+                    self.log.append(f"{n} field(s) filled on this page." if n else
+                                    "Nothing recognised to fill on this page.")
+
             with sync_playwright() as pw:
-                ctx = pw.chromium.launch_persistent_context(str(config.BROWSER_PROFILE), headless=False)
+                ctx = pw.chromium.launch_persistent_context(  # visible: you log in and click the buttons
+                    str(config.BROWSER_PROFILE), headless=os.environ.get("JOURNALFIT_HEADLESS") == "1")
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 page.goto(url)
-                self.log.append("Browser opened. Log in, start a new submission, then press 'Fill this page'.")
+                self.log.append("Browser opened. Log in and start a new submission. Each form page is "
+                                "filled automatically when it appears; you click Next/Continue and Submit.")
+                last_sig, pending, polls = "", "", 0
                 while True:
-                    cmd, arg = self.q.get()
+                    try:
+                        cmd, arg = self.q.get(timeout=1.5)
+                    except queue.Empty:
+                        cmd, arg = "watch", None
                     if cmd == "stop":
                         break
                     try:
+                        page = ctx.pages[-1]  # portals often open the form in a new tab
                         if cmd == "goto":
-                            ctx.pages[-1].goto(arg)
+                            page.goto(arg)
                         elif cmd == "fill":
-                            n = fill_page(ctx.pages[-1], plan, log=self.log.append)
-                            self.log.append(f"{n} field(s) filled on this page." if n else
-                                            "Nothing to fill on this page.")
+                            fill(page, manual=True)
+                            last_sig = page_signature(page)
+                        elif cmd == "watch" and self.auto:
+                            sig = page_signature(page)
+                            # Fill once the new page has stopped changing for one poll.
+                            if sig and sig != last_sig:
+                                if sig == pending:
+                                    polls += 1
+                                else:
+                                    pending, polls = sig, 0
+                                if polls >= 1:
+                                    fill(page, manual=False)
+                                    last_sig = page_signature(page)
                     except Exception as e:
-                        self.log.append(f"Problem: {e}")
+                        if cmd != "watch":
+                            self.log.append(f"Problem: {e}")
                 ctx.close()
         except Exception as e:
             self.log.append(f"Could not run the browser: {e}")
@@ -427,6 +457,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not ASSISTANT.active:
                     raise ValueError("Open the submission website first.")
                 ASSISTANT.q.put(("fill", None))
+                return self._json({"ok": True})
+            if u.path == "/api/assist/auto":
+                ASSISTANT.auto = bool(body.get("on"))
                 return self._json({"ok": True})
             if u.path == "/api/assist/stop":
                 ASSISTANT.q.put(("stop", None))
