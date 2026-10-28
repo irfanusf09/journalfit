@@ -54,7 +54,9 @@ COLLECT_JS = r"""
     for (let depth = 0; depth < 6 && node; depth++) {
       let sib = node.previousElementSibling, hops = 0;
       while (sib && hops < 3) {
-        if (!sib.matches('input, textarea, select') && txt(sib)) { add(txt(sib).slice(0, 160)); break; }
+        if (!sib.matches('input, textarea, select, style, script, link, meta, head, noscript') && txt(sib)) {
+          add(txt(sib).slice(0, 160)); break;
+        }
         sib = sib.previousElementSibling; hops++;
       }
       if (node.tagName === 'TD') { const row = node.closest('tr'); if (row) add(txt(row)); }
@@ -151,9 +153,15 @@ def match_field(label: str, is_file: bool) -> str | None:
     return match_bits([label], is_file)
 
 
+def words_of(text: str) -> str:
+    """'fullTitleHtml' -> 'full Title Html', 'abstract_html' -> 'abstract html' (field names as words)."""
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    return re.sub(r"[_$]+", " ", text)
+
+
 def match_bits(bits: list[str], is_file: bool) -> str | None:
     """The nearest label text decides: a field's own label beats text further away on the page."""
-    for bit in bits:
+    for bit in map(words_of, bits):
         if not is_file and PERSON_FIELD.search(bit):
             return None
         for key, rx in (FILE_RULES if is_file else FIELD_RULES):
@@ -177,6 +185,50 @@ def pick_article_type(options: list[str], article_type: str) -> str | None:
     return hits[0] if len(hits) >= 1 else None
 
 
+ITEM_TYPES = [  # (file key, option pattern) in upload order
+    ("manuscript_file", re.compile(r"^\s*(main\s+)?manuscript(\s+file)?\s*$|^\s*(main\s+)?(article|document)\s*$", re.I)),
+    ("cover_letter_file", re.compile(r"cover\s*letter", re.I)),
+    ("supplementary_file", re.compile(r"supplement|supporting|electronic\s+supplementary", re.I)),
+]
+
+
+def _is_item_type_list(f: dict) -> bool:
+    opts = " | ".join(f.get("options") or [])
+    return f["type"] == "select" and bool(re.search(r"manuscript", opts, re.I)) and \
+        bool(re.search(r"cover\s*letter|figure|supplement", opts, re.I))
+
+
+def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str]) -> str | None:
+    """Sites like Editorial Manager: pick the file's Item Type, then attach that one file.
+
+    Uploads one file per call (these sites refresh after each upload); returns what was done,
+    or None if this page isn't that kind of upload page.
+    """
+    lists = [f for f in fields if _is_item_type_list(f)]
+    inputs = [f for f in fields if f["type"] == "file"]
+    if not lists or not inputs:
+        return None
+    pending = []
+    for key, pattern in ITEM_TYPES:
+        paths = plan.supplements if key == "supplementary_file" else [plan.files.get(key)]
+        pending += [(p, pattern) for p in paths if p and p not in used]
+    if not pending:
+        return "all files already uploaded"
+    path, pattern = pending[0]
+    choice = next((o for o in lists[0].get("options") or [] if pattern.search(o)), None)
+    if not choice:
+        return f"no item type for {Path(path).name} (left for you)"
+    frame.locator(f'[data-jf-idx="{lists[0]["idx"]}"]').select_option(label=choice)
+    frame.wait_for_timeout(800)  # the site may enable its file box after the type is chosen
+    # The file box next to the Item Type list, else the first one.
+    target = next((f for f in inputs if any(re.search(r"item\s*type", words_of(b), re.I) for b in f["bits"])), inputs[0])
+    frame.locator(f'[data-jf-idx="{target["idx"]}"]').set_input_files(path)
+    used.add(path)
+    left = len(pending) - 1
+    return (f"chose item type '{choice}' and uploaded {Path(path).name}"
+            + (f"; {left} more file(s) will follow after the site finishes this upload" if left else ""))
+
+
 def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: list | None = None) -> int:
     """Fill every recognised field on the current page. Never clicks buttons.
 
@@ -194,7 +246,20 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
         except Exception:
             continue  # cross-origin or detached frame
         idx += len(fields) + 1
+        try:
+            done = upload_with_item_type(frame, fields, plan, used_files)
+        except Exception as e:
+            done = f"upload failed: {e}"
+        if done is not None:
+            saw_file_input = supplements_done = True  # this page's files are handled one by one
+            log(f"  {done}")
+            if done.startswith("chose item type"):
+                filled += 1
+            if report is not None:
+                report.append(f"  [{done}]")
         for f in fields:
+            if done is not None and (f["type"] == "file" or _is_item_type_list(f)):
+                continue
             is_file = f["type"] == "file"
             saw_file_input |= is_file
             key = match_bits(f.get("bits") or [f["label"]], is_file)
@@ -309,12 +374,13 @@ def run(package_dir: Path, url: str | None = None) -> None:
                                                     accept_downloads=False)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(url)
+        uploaded: set[str] = set()  # never upload the same file twice in one session
         while True:
             cmd = input("[Enter] autofill current page   [q] quit > ").strip().lower()
             if cmd == "q":
                 break
             page = ctx.pages[-1]  # portals sometimes open the form in a new tab
-            n = fill_page(page, plan)
+            n = fill_page(page, plan, uploaded=uploaded)
             print(f"  {n} field(s) filled on this page." if n else "  Nothing to fill on this page.")
         ctx.close()
     print("Browser closed. If you did not click Submit, nothing was submitted.")

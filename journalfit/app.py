@@ -228,8 +228,7 @@ class Assistant:
 
             def fill(page, manual: bool) -> None:
                 report: list[str] = []
-                n = fill_page(page, plan, log=self.log.append,
-                              uploaded=set() if manual else uploaded, report=report)
+                n = fill_page(page, plan, log=self.log.append, uploaded=uploaded, report=report)
                 write_report(package, page.url, report)
                 if n or manual:
                     self.log.append(f"{n} field(s) filled on this page." if n else

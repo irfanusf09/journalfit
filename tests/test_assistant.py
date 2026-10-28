@@ -189,3 +189,79 @@ def test_pick_article_type():
     assert pick_article_type(opts, "systematic review") == "Review Article"
     assert pick_article_type(["Select", "Article", "Letter"], "original research") == "Article"
     assert pick_article_type(["Select", "Letter", "Editorial"], "original research") is None
+
+
+CKE = ("<html><head><style>html{cursor:text}.cke_editable{cursor:text}</style></head>"
+       "<body contenteditable=\"true\" class=\"cke_editable\" title=\"Rich Text Editor, {name}\"></body></html>")
+
+EDITORIAL_MANAGER_UPLOAD = """
+<html><body><form>
+<div>Select Item Type
+  <select id="ddSubmissionItemType" name="ddSubmissionItemType">
+    <option>Select Item Type</option><option>Cover Letter</option><option>Manuscript</option>
+    <option>Manuscript with Tracked Changes</option><option>Figure</option><option>Table</option>
+    <option>Supplementary Material</option></select>
+  <input type="file" id="fileInput" name="upload_file" style="display:none">
+</div>
+<div>Description <input type="text" id="meta_Description"></div>
+<table><tr><td>File Name:</td><td><input type="file" id="fileInput2"></td></tr>
+<tr><td>Delivery Method</td><td>Online Web System</td></tr></table>
+</form></body></html>
+"""
+
+
+def test_editorial_manager_rich_text_title_and_abstract(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    plan, _ = load_plan(_pkg(tmp_path))
+    page_html = ("<div>Enter Title</div><iframe title=\"Rich Text Editor, fullTitleHtml\" srcdoc='"
+                 + CKE.replace("{name}", "fullTitleHtml") + "'></iframe>"
+                 "<div>Enter Abstract</div><iframe title=\"Rich Text Editor, abstractHtml\" srcdoc='"
+                 + CKE.replace("{name}", "abstractHtml") + "'></iframe>")
+    report = []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(page_html)
+        page.wait_for_timeout(300)
+        n = fill_page(page, plan, log=lambda *_: None, report=report)
+        title = page.frames[1].inner_text("body")
+        abstract = page.frames[2].inner_text("body")
+        b.close()
+    assert n == 2, report
+    assert title.startswith("Does connectivity flatten") and abstract == "We study 185 countries."
+    assert not any("cursor" in line for line in report)  # styling code is no longer read as a label
+
+
+def test_editorial_manager_uploads_one_file_at_a_time_with_item_type(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    pkg = _pkg(tmp_path)
+    (pkg / "cover_letter.docx").write_bytes(b"c")
+    (pkg / "supplementary").mkdir()
+    (pkg / "supplementary" / "data.xlsx").write_bytes(b"d")
+    plan, _ = load_plan(pkg)
+    uploaded = set()
+    steps = []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        for _ in range(4):  # the site refreshes the page after each upload
+            page.set_content(EDITORIAL_MANAGER_UPLOAD)
+            fill_page(page, plan, log=lambda *_: None, uploaded=uploaded)
+            steps.append((page.eval_on_selector("#ddSubmissionItemType", "s => s.options[s.selectedIndex].text"),
+                          page.evaluate("document.querySelector('#fileInput').files[0]?.name || ''"),
+                          page.evaluate("document.querySelector('#fileInput2').files[0]?.name || ''")))
+        b.close()
+    assert steps == [
+        ("Manuscript", "manuscript.docx", ""),
+        ("Cover Letter", "cover_letter.docx", ""),
+        ("Supplementary Material", "data.xlsx", ""),
+        ("Select Item Type", "", ""),  # everything uploaded: nothing more is touched
+    ]
+
+
+def test_field_names_written_as_identifiers_are_understood():
+    assert match_field("Rich Text Editor, fullTitleHtml", False) == "title"
+    assert match_field("Rich Text Editor, abstractHtml", False) == "abstract"
+    assert match_field("txt_Keywords", False) == "keywords"
