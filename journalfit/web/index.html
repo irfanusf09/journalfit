@@ -193,7 +193,8 @@
       <li>Check every page yourself. <b>This tool never clicks any button.</b> Only you can press Submit.</li>
     </ol>
     <div class="field"><label for="subUrl">Submission website</label>
-      <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/..."></div>
+      <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/...">
+      <span class="muted" id="subHint"></span></div>
     <div class="row">
       <button class="primary" id="openSiteBtn">Open submission website</button>
       <button id="fillBtn" disabled>Fill this page</button>
@@ -433,6 +434,8 @@ async function prepare(index, name) {
       $("cover").textContent = pkg.cover_letter;
       $("coverBox").classList.toggle("hidden", !pkg.cover_letter);
       $("subUrl").value = pkg.submission_url;
+      $("subHint").textContent = pkg.submission_url_found ? "" :
+        "The journal's direct submission link wasn't found, so this is its homepage. After it opens, click the journal's 'Submit manuscript' button, then use 'Fill this page'.";
       $("submitCard").classList.remove("hidden");
     });
   } catch (e) { alert(e.message); }

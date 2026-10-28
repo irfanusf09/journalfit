@@ -286,3 +286,11 @@ def test_deepseek_uses_search_summary_when_page_cannot_be_opened(monkeypatch):
     assert m.days_to_first_decision == 20
     prompt = [c for c in post.calls if c["url"] == DeepSeek.URL][0]["json"]["messages"][1]["content"]
     assert "[Search result summary of" in prompt and "first decision 20 days" in prompt
+
+
+def test_cover_letter_includes_journal_required_declarations():
+    c, msgs = make([resp(json.dumps({"letter": "Dear Editor, ..."}))])
+    c.cover_letter(Manuscript(path="x", title="T", abstract="A"), Journal("S", "ESPR"), {"name": "I. Y."}, "fits",
+                   ["Cover letter including preprint server declaration", "Title page", "6-8 keywords"])
+    prompt = msgs.calls[0]["messages"][0]["content"]
+    assert "preprint server declaration" in prompt and "Title page" not in prompt

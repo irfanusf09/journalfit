@@ -285,15 +285,21 @@ class LLM:
             + "Using only these guidelines. " + tail.replace("End your reply with a fenced json block:", "Return JSON:"),
             _guide_schema())))
 
-    def cover_letter(self, ms: Manuscript, j: Journal, author: dict, scope_reason: str = "") -> str:
+    def cover_letter(self, ms: Manuscript, j: Journal, author: dict, scope_reason: str = "",
+                     requirements: list[str] | None = None) -> str:
+        needs = [r for r in requirements or [] if re.search(r"cover letter|preprint|declar|statement", r, re.I)]
         prompt = (
             f"Write a submission cover letter to the editor of {j.name}.\n"
             f"Corresponding author: {json.dumps(author)}\n"
             f"Title: {ms.title}\nArticle type: {ms.article_type}\nAbstract: {ms.abstract}\n"
-            f"Why this journal: {scope_reason}\n\n"
+            f"Why this journal: {scope_reason}\n"
+            + ("This journal's author guidelines require the following, so include each one that belongs "
+               "in a cover letter (use [placeholders] for facts not given, e.g. whether a preprint exists):\n"
+               + "\n".join(f"- {r}" for r in needs) + "\n" if needs else "")
+            + "\n"
             "Plain text, under 350 words: address the Editor-in-Chief (use 'Dear Editor' if the name "
-            "is unknown), state the title and article type, the problem, the main findings and why "
-            "they matter to this journal's readers. Include the standard declarations: the work is "
+            "is unknown), state the title and article type, the problem, the two or three main findings "
+            "in plain words (do not copy the abstract) and why they matter to this journal's readers. Include the standard declarations: the work is "
             "original, not published or under consideration elsewhere, all authors approved the "
             "submission, and competing interests are declared. Do not invent results, numbers, "
             "names or affiliations that are not given above; use [placeholders] where needed."

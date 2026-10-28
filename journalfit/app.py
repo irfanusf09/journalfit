@@ -181,7 +181,9 @@ def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> 
         "journal": cand.journal.name, "package": str(pkg),
         "checklist": (pkg / "checklist.md").read_text(),
         "cover_letter": cover.read_text() if cover.exists() else "",
-        "submission_url": meta.get("submission_url") or "",
+        # No portal link found: the journal homepage has a "Submit manuscript" button to start from.
+        "submission_url": meta.get("submission_url") or cand.journal.homepage or meta.get("guidelines_url") or "",
+        "submission_url_found": bool(meta.get("submission_url")),
         "files": sorted(p.name for p in pkg.iterdir()),
         "supplementary": meta.get("supplementary_files", []),
     }

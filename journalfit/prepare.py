@@ -47,7 +47,7 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
                 guide["guidelines_url"] = url
         except Exception as e:
             guide = {"error": str(e)}
-        letter = llm.cover_letter(ms, j, author, cand.scope_reason)
+        letter = llm.cover_letter(ms, j, author, cand.scope_reason, guide.get("required_items") or [])
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 
