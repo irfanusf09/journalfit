@@ -88,7 +88,7 @@ def write_report(res: FindResult, out_dir: Path) -> Path:
         lines.append("")
     if res.excluded:
         lines += ["## Excluded journals that matched the topic", ""]
-        for c in sorted(res.excluded, key=lambda c: -c.text_fit)[:30]:
+        for c in excluded_order(res.excluded)[:40]:
             lines.append(f"- {c.journal.name} ({c.journal.publisher}): {c.excluded_reason}")
     path = out_dir / "shortlist.md"
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -114,3 +114,9 @@ def candidate_from_dict(d: dict) -> Candidate:
     d = dict(d)
     d["journal"] = Journal(**jd)
     return Candidate(**d)
+
+
+def excluded_order(excluded):
+    """Near misses first (speed, acceptance, scope), then access/indexing exclusions; best topic match first."""
+    basic = ("fully open access", "not open access", "not scopus", "scopus status", "discontinued", "publisher")
+    return sorted(excluded, key=lambda c: (c.excluded_reason.lower().startswith(basic), -c.text_fit))

@@ -101,7 +101,7 @@ def run_find(job: Job, body: dict) -> dict:
     from .finder import Finder
     from .http import HttpClient
     from .prepare import slug
-    from .report import write_report
+    from .report import excluded_order, write_report
 
     path = Path(body["manuscript"])
     c = body.get("criteria", {})
@@ -141,7 +141,7 @@ def run_find(job: Job, body: dict) -> dict:
         "folder": str(out),
         "ranked": [_cand_json(c) for c in res.ranked],
         "excluded": [{"name": c.journal.name, "publisher": c.journal.publisher, "reason": c.excluded_reason}
-                     for c in sorted(res.excluded, key=lambda c: -c.text_fit)[:25]],
+                     for c in excluded_order(res.excluded)[:40]],
     }
 
 

@@ -150,10 +150,34 @@ def test_metric_filters_and_missing_policy():
     assert f.apply_metric_filters(_cand(days_to_first_decision=40), crit) == "acceptance rate not published"
 
 
-def test_scope_veto_lowers_score():
-    good = Candidate(journal=Journal("a", "A", metrics=Metrics(quartile="Q1")), text_fit=0.9, scope_fit=0.9)
-    off = Candidate(journal=Journal("b", "B", metrics=Metrics(quartile="Q1")), text_fit=1.0, scope_fit=0.2)
-    assert final_score(good, 1) > final_score(off, 1)
+def test_faster_acceptance_scores_higher():
+    fast = Candidate(journal=Journal("a", "A", metrics=Metrics(quartile="Q1", days_to_acceptance=90)), text_fit=0.8)
+    slow = Candidate(journal=Journal("b", "B", metrics=Metrics(quartile="Q1", days_to_acceptance=330)), text_fit=0.8)
+    assert final_score(fast, 1) > final_score(slow, 1)
+
+
+def test_poor_scope_fit_is_excluded(tmp_path, monkeypatch):
+    monkeypatch.setattr("journalfit.config.OVERRIDES_PATH", tmp_path / "none.csv")
+    monkeypatch.setattr("journalfit.config.DATA_DIR", tmp_path)
+
+    class ScopeLLM:
+        def review_scope(self, ms, cands):
+            for c in cands:
+                c.scope_fit = 0.2 if c.journal.name == "Journal of Materials Science" else 0.9
+
+        def lookup_metrics(self, j, pages=None):
+            return Metrics()
+
+    p = tmp_path / "paper.docx"
+    make_docx(p)
+    idx = IndexingData()
+    idx.scimago = parse_scimago(SCIMAGO)
+    f = Finder(FakeHttp(), llm=ScopeLLM(), indexing=idx, use_browser=False, log=lambda *_: None)
+    res = f.find(manuscript.parse(p), Criteria(scopus=True), top=5)
+    assert "Journal of Materials Science" not in [c.journal.name for c in res.ranked]
+    reasons = {c.journal.name: c.excluded_reason for c in res.excluded}
+    assert reasons["Journal of Materials Science"] == "poor scope fit (2/10): desk rejection likely"
+    assert any("Only" in n for n in res.notes)
 
 
 # --------------------------------------------------------------------------- end to end

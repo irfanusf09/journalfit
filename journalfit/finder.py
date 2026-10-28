@@ -19,6 +19,7 @@ from .sources.crossref import review_speed
 from .sources.indexing import IndexingData, norm_issn
 from .sources.openalex import OpenAlex, Work
 
+MIN_SCOPE_FIT = 0.4  # scope ratings of 3/10 or lower are excluded
 QUARTILE_SCORE = {"Q1": 1.0, "Q2": 0.75, "Q3": 0.5, "Q4": 0.25}
 
 
@@ -269,12 +270,21 @@ class Finder:
             except Exception as e:
                 notes.append(f"Scope review unavailable: {e}")
 
+        # An editor would almost certainly desk-reject these: don't recommend them at all.
+        for c in [c for c in kept if c.scope_fit is not None and c.scope_fit < MIN_SCOPE_FIT]:
+            kept.remove(c)
+            c.excluded_reason = f"poor scope fit ({c.scope_fit * 10:.0f}/10): desk rejection likely"
+            excluded.append(c)
+
         max_refs = max((c.reference_hits for c in kept), default=0) or 1
         for c in kept:
             c.score = final_score(c, max_refs)
         kept.sort(key=lambda c: -c.score)
         if not kept:
             notes.append("No journal met every rule. Loosen a threshold or use --if-missing keep.")
+        elif len(kept) < top:
+            notes.append(f"Only {len(kept)} journals passed every rule and fit the paper well; "
+                         "the excluded list shows the near misses.")
         return FindResult(ms, criteria, kept[:top], excluded, notes, trace.lines())
 
 
@@ -314,11 +324,10 @@ def final_score(c: Candidate, max_refs: int) -> float:
     if c.scope_fit is not None:
         parts.append((0.30, c.scope_fit))
     quality = QUARTILE_SCORE.get(m.quartile or "", 0.4)
-    if m.days_to_first_decision is not None:
-        quality = 0.8 * quality + 0.2 * max(0.0, 1 - m.days_to_first_decision / 180)
+    # Speed bonus: time to acceptance is the meaningful one (a fast first decision is often a desk rejection).
+    if m.days_to_acceptance is not None:
+        quality = 0.8 * quality + 0.2 * max(0.0, 1 - m.days_to_acceptance / 365)
     parts.append((0.10, quality))
     total_w = sum(w for w, _ in parts)
     score = sum(w * v for w, v in parts) / total_w
-    if c.scope_fit is not None and c.scope_fit < 0.4:
-        score *= 0.6  # an editor would likely desk-reject: rank it well down
     return round(score * 100, 1)
