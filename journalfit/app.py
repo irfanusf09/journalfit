@@ -110,6 +110,7 @@ def run_find(job: Job, body: dict) -> dict:
         exclude_publishers=[p.strip() for p in (c.get("exclude_publishers") or "").split(",") if p.strip()],
         no_oa=bool(c.get("no_oa")), oa_only=bool(c.get("oa_only")), scopus=bool(c.get("scopus")),
         max_first_decision_days=_num(c.get("max_first_decision")),
+        max_acceptance_days=_num(c.get("max_acceptance_days")),
         min_acceptance_rate=_num(c.get("min_acceptance")),
         min_quartile=c.get("min_quartile") or None,
         max_apc_usd=_num(c.get("max_apc")),

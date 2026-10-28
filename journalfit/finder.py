@@ -141,6 +141,14 @@ class Finder:
                 c.warnings.append("time to first decision not published")
             elif d > criteria.max_first_decision_days:
                 return f"first decision {d:g} days > {criteria.max_first_decision_days:g}"
+        if criteria.max_acceptance_days is not None:
+            d = m.days_to_acceptance
+            if d is None:
+                if criteria.if_missing == "skip":
+                    return "time to acceptance unknown"
+                c.warnings.append("time to acceptance unknown")
+            elif d > criteria.max_acceptance_days:
+                return f"acceptance takes {d:g} days > {criteria.max_acceptance_days:g}"
         if criteria.min_acceptance_rate is not None:
             a = m.acceptance_rate
             if a is None:

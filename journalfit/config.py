@@ -28,6 +28,7 @@ class Criteria:
     oa_only: bool = False
     scopus: bool = False
     max_first_decision_days: float | None = None
+    max_acceptance_days: float | None = None  # submission to acceptance
     min_acceptance_rate: float | None = None
     min_quartile: str | None = None  # e.g. "Q2" keeps Q1 and Q2
     max_apc_usd: float | None = None
@@ -48,6 +49,8 @@ class Criteria:
             parts.append("Scopus-indexed")
         if self.max_first_decision_days is not None:
             parts.append(f"first decision <= {self.max_first_decision_days:g} days")
+        if self.max_acceptance_days is not None:
+            parts.append(f"accepted within {self.max_acceptance_days:g} days")
         if self.min_acceptance_rate is not None:
             parts.append(f"acceptance rate >= {self.min_acceptance_rate:g}%")
         if self.min_quartile:

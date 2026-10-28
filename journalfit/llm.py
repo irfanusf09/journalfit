@@ -250,7 +250,7 @@ class LLM:
                                               _metrics_schema(), effort="low"))
         data = _json_from_text(text)
         m = Metrics()
-        url = data.get("source_url") or "AI lookup"
+        url = _clean_url(str(data.get("source_url") or "")) or "AI lookup"
         for name in METRIC_FIELDS:
             v = data.get(name)
             if isinstance(v, (int, float)) and v > 0:
@@ -555,7 +555,8 @@ def _clean_url(url: str) -> str:
     if not url:
         return ""
     u = urlparse(url)
-    q = [(k, v) for k, v in parse_qsl(u.query) if not k.lower().startswith(("utm_", "gad_", "gclid", "fbclid"))]
+    q = [(k, v) for k, v in parse_qsl(u.query)
+         if not k.lower().startswith(("utm_", "gad_", "gclid", "fbclid", "_gl", "_ga", "issharedlink", "page"))]
     return urlunparse(u._replace(query=urlencode(q), fragment=""))
 
 

@@ -41,6 +41,8 @@ def add_filter_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--scopus", action="store_true", help="only journals currently indexed in Scopus")
     g.add_argument("--max-first-decision", type=float, metavar="DAYS",
                    help="skip journals slower than this to first decision")
+    g.add_argument("--max-acceptance-days", type=float, metavar="DAYS",
+                   help="skip journals where acceptance typically takes longer (submission to acceptance)")
     g.add_argument("--min-acceptance", type=float, metavar="PCT", help="skip journals accepting fewer than PCT%%")
     g.add_argument("--min-quartile", choices=["Q1", "Q2", "Q3", "Q4"], help="e.g. Q2 keeps Q1 and Q2")
     g.add_argument("--max-apc", type=float, metavar="USD", help="max publication fee for open-access journals")
@@ -64,6 +66,7 @@ def criteria_from(a: argparse.Namespace) -> Criteria:
         publishers=_csv(a.publisher), exclude_publishers=_csv(a.exclude_publisher),
         no_oa=a.no_oa, oa_only=a.oa_only, scopus=a.scopus,
         max_first_decision_days=a.max_first_decision, min_acceptance_rate=a.min_acceptance,
+        max_acceptance_days=a.max_acceptance_days,
         min_quartile=a.min_quartile, max_apc_usd=a.max_apc, if_missing=a.if_missing, years=a.years,
     )
 

@@ -415,3 +415,23 @@ def test_too_few_dated_papers_gives_nothing():
             return {"message": {"items": CROSSREF_ITEMS[:5]}}
 
     assert review_speed("1234-5678", Http()) is None
+
+
+def test_acceptance_time_rule():
+    f = Finder.__new__(Finder)
+    crit = Criteria(max_acceptance_days=180)
+    assert f.apply_metric_filters(_cand(days_to_acceptance=280.5), crit).startswith("acceptance takes 280.5 days")
+    assert f.apply_metric_filters(_cand(days_to_acceptance=145.0), crit) == ""
+    unknown = _cand()
+    assert f.apply_metric_filters(unknown, crit) == "" and unknown.warnings == ["time to acceptance unknown"]
+    assert "accepted within 180 days" in crit.describe()
+
+
+def test_source_urls_are_tidied():
+    from journalfit.llm import _clean_url
+
+    assert _clean_url("https://www.sciencedirect.com/journal/tourism-management?_gl=1%2Aie3zsp%2A_ga%2ANjM") == \
+        "https://www.sciencedirect.com/journal/tourism-management"
+    assert _clean_url("https://link.springer.com/journal/11356?page=4#1") == "https://link.springer.com/journal/11356"
+    assert _clean_url("https://www.tandfonline.com/action/journalInformation?show=journalMetrics&journalCode=x") == \
+        "https://www.tandfonline.com/action/journalInformation?show=journalMetrics&journalCode=x"
