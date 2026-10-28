@@ -617,12 +617,14 @@ class DeepSeek(LLM):
                    + ("" if results or data is None else f"; response keys: {list(data)[:10] if isinstance(data, dict) else type(data).__name__}"))
         hosts = publisher_hosts(j)
         official = []
+        snippets: dict[str, str] = {}
         for r in results:
             url = _clean_url(r.get("url") or r.get("link") or "")
             ok = url and url not in (skip or set()) and _is_journal_info_url(url, hosts)
             trace.note(f"      {'+' if ok else '-'} {url or sorted(r)[:6]}")
             if ok and url not in official:
                 official.append(url)
+                snippets[url] = " ".join(str(r.get(k) or "") for k in ("title", "summary", "snippet", "description", "content"))
         trace.note(f"    publisher pages kept: {official[:limit] or 'none'}")
         marks = [m.lower() for m in journal_markers(j)]
         pages: dict[str, str] = {}
@@ -632,6 +634,12 @@ class DeepSeek(LLM):
                 trace.note(f"    DeepSeek fetch {url}: page is about a different journal, ignored")
                 continue
             trace.note(f"    DeepSeek fetch {url}: " + (f"{len(text):,} chars" if text else "no text"))
+            if not text:
+                # The page couldn't be opened, but the search result's own summary of it may hold the numbers.
+                snip = snippets.get(url, "").strip()
+                if snip and any(m in snip.lower() for m in marks):
+                    text = f"[Search result summary of {url}] {snip}"
+                    trace.note(f"    using the search result's summary instead: \"{snip[:160]}\"")
             if text:
                 pages[url] = text
         return pages

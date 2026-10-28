@@ -362,6 +362,7 @@ function showResults(r) {
       <div class="chips">
         ${chip("First decision", fmt(m.days_to_first_decision, " days"))}
         ${chip("Acceptance", fmt(m.acceptance_rate, "%"))}
+        ${m.days_to_acceptance !== null ? `<span class="chip" title="${esc((m.sources || {}).days_to_acceptance || "")}">Submission to acceptance: ${fmt(m.days_to_acceptance, " days")}</span>` : ""}
         ${chip("Quality", m.quartile)}
         ${m.impact_factor !== null ? chip("Impact factor", fmt(m.impact_factor)) : ""}
         ${m.sjr !== null ? chip("SJR", fmt(m.sjr)) : ""}

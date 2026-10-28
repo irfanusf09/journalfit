@@ -24,7 +24,8 @@ def _fmt(v, suffix="", none="—"):
 
 def metrics_line(m: Metrics) -> str:
     return (f"first decision {_fmt(m.days_to_first_decision, ' d', 'n/p')} · "
-            f"acceptance {_fmt(m.acceptance_rate, '%', 'n/p')} · {m.quartile or 'Q?'} · "
+            f"acceptance {_fmt(m.acceptance_rate, '%', 'n/p')} · "
+            f"submission to acceptance {_fmt(m.days_to_acceptance, ' d', 'n/p')} · {m.quartile or 'Q?'} · "
             f"SJR {_fmt(m.sjr)} · IF {_fmt(m.impact_factor)} · CiteScore {_fmt(m.citescore)}")
 
 

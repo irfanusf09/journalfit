@@ -11,7 +11,8 @@ Give it a manuscript. It finds the journals that fit best (from any publisher), 
    - time to first decision, time to acceptance, acceptance rate, Impact Factor and CiteScore, read from publisher pages (Elsevier, Springer Nature, Taylor & Francis, Wiley, MDPI, and the homepage for others);
    - a headless browser for sites that block plain requests;
    - Claude web lookup, restricted to official pages, for anything still missing;
-   - SJR, quartile and h-index from SCImago (Scopus data).
+   - SJR, quartile and h-index from SCImago (Scopus data);
+   - submission-to-acceptance time from Crossref: the median of the received and accepted dates that publishers record for recent papers. This works even when a publisher's website blocks automated access.
 
    The source of every number is recorded. A missing value is shown as "n/p" (not published), never guessed.
 5. **Applies your metric limits** (`--max-first-decision`, `--min-acceptance`). Journals that don't publish a metric are kept and flagged, or skipped with `--if-missing skip`.

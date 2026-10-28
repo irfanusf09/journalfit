@@ -43,6 +43,9 @@ tool never clicks buttons on submission sites.
   IF and CiteScore, and records the matched sentence as evidence.
 - `llm.py` covers the providers (Claude Haiku/Opus/mix, OpenAI, Gemini, DeepSeek with its
   Search and Fetch APIs), cost tracking and the pipeline prompts.
+- `sources/crossref.py` computes the median submission-to-acceptance days from the
+  received and accepted dates publishers record in Crossref. It works even when the
+  journal's website blocks the tool.
 - `finder.py` runs the pipeline: AI lookups for the top N journals (20 for DeepSeek),
   a 90-day cache of real findings, a scope review of every finalist, and diagnostics.
 - `prepare.py` builds the package (checklist, cover letter, supplementary files).
@@ -72,5 +75,7 @@ Next steps:
      probably genuine medians that include desk rejections.
    - Confirm the CiteScore year bug is gone (previously "citescore=2025").
 2. Done: "Enter metrics" button on each journal card (saves to `~/.journalfit/metrics_overrides.csv`), plus an "Open metrics page" link.
-3. Try the full flow (Prepare, then Open submission website, then Fill this page) on a
+3. Done: when DeepSeek search finds an official page it can't open, the search result's
+   summary is used (it often contains the numbers).
+4. Try the full flow (Prepare, then Open submission website, then Fill this page) on a
    real journal portal and fix the field matching where needed.

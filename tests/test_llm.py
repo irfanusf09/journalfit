@@ -233,3 +233,22 @@ def test_deepseek_ignores_pages_about_another_journal(monkeypatch):
     monkeypatch.setattr(llm_mod.requests, "post", post)
     d = DeepSeek("deepseek-flash", "k")
     assert d.web_pages("q", Journal("S", "Journal of Things", publisher="Springer")) == {}
+
+
+def test_deepseek_uses_search_summary_when_page_cannot_be_opened(monkeypatch):
+    answer = '{"days_to_first_decision": 20, "days_to_acceptance": null, "acceptance_rate": null, ' \
+             '"impact_factor": null, "citescore": null, "source_url": "https://onlinelibrary.wiley.com/journal/1/journal-metrics"}'
+    post = RoutedPost({
+        DeepSeek.SEARCH_URL: {"results": [{
+            "url": "https://onlinelibrary.wiley.com/journal/1/journal-metrics",
+            "title": "Journal of Things - Journal metrics - Wiley",
+            "summary": "Journal of Things: submission to first decision 20 days."}]},
+        DeepSeek.FETCH_URL: {},  # Wiley page can't be opened
+        DeepSeek.URL: {"choices": [{"message": {"content": answer}}], "usage": {}},
+    })
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    d = DeepSeek("deepseek-flash", "k")
+    m = d.lookup_metrics(Journal("S", "Journal of Things", publisher="Wiley"))
+    assert m.days_to_first_decision == 20
+    prompt = [c for c in post.calls if c["url"] == DeepSeek.URL][0]["json"]["messages"][1]["content"]
+    assert "[Search result summary of" in prompt and "first decision 20 days" in prompt

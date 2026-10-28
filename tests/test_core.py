@@ -204,8 +204,20 @@ WORKS = [
 ]
 
 
+CROSSREF_ITEMS = [
+    {"DOI": f"10.1/x{i}", "assertion": [
+        {"name": "received", "value": f"{1 + i % 20} January 2024"},
+        {"name": "accepted", "value": f"{1 + i % 20} April 2024"},  # ~91 days later
+        {"name": "first_online", "value": "1 May 2024"}]}
+    for i in range(20)
+] + [{"DOI": "10.1/no-dates", "assertion": [{"name": "copyright", "value": "Springer"}]}]
+
+
 class FakeHttp:
     def get_json(self, url, params=None, ttl=None):
+        if url.startswith("https://api.crossref.org/"):
+            items = CROSSREF_ITEMS if "/journals/0022-2461/" in url else []
+            return {"message": {"items": items}}
         if url.endswith("/works"):
             if params["filter"].startswith("doi:"):
                 return {"results": [WORKS[2]]}
@@ -239,6 +251,8 @@ def test_finder_end_to_end(tmp_path, monkeypatch):
     reasons = {c.journal.name: c.excluded_reason for c in res.excluded}
     assert reasons["Batteries"] == "fully open access"
     assert reasons["Slow Journal"].startswith("first decision 200")
+    jms = next(c for c in res.ranked if c.journal.name == "Journal of Materials Science").journal.metrics
+    assert jms.days_to_acceptance == 91 and "median of 20 recent papers" in jms.sources["days_to_acceptance"]
     carbon = res.ranked[0].journal.metrics
     assert carbon.days_to_first_decision == 28 and carbon.acceptance_rate == 25 and carbon.quartile == "Q1"
     assert "insights" in carbon.sources["days_to_first_decision"]
@@ -374,3 +388,30 @@ def test_save_override_adds_replaces_and_validates(tmp_path):
         save_override("1470-6423", {"acceptance_rate": "150"}, "", path)
     with pytest.raises(ValueError):
         save_override("", {"acceptance_rate": "10"}, "", path)
+
+
+def test_crossref_dates():
+    from journalfit.sources.crossref import acceptance_days, parse_date
+
+    import datetime as dt
+    assert parse_date("12 March 2024") == dt.date(2024, 3, 12)
+    assert parse_date("2024-03-12") == dt.date(2024, 3, 12)
+    assert parse_date("March 12th, 2024") == dt.date(2024, 3, 12)
+    assert parse_date("12 Mar 2024.") == dt.date(2024, 3, 12)
+    assert parse_date("sometime") is None
+    items = [
+        {"assertion": [{"name": "Received", "value": "1 Jan 2024"}, {"name": "Accepted", "value": "11 Jan 2024"}]},
+        {"assertion": [{"name": "received", "value": "1 Jan 2024"}]},  # no accepted date
+        {"assertion": [{"name": "received", "value": "1 Jan 2024"}, {"name": "accepted", "value": "1 Jan 2020"}]},  # typo
+    ]
+    assert acceptance_days(items) == [10]
+
+
+def test_too_few_dated_papers_gives_nothing():
+    from journalfit.sources.crossref import review_speed
+
+    class Http:
+        def get_json(self, url, params=None, ttl=None):
+            return {"message": {"items": CROSSREF_ITEMS[:5]}}
+
+    assert review_speed("1234-5678", Http()) is None

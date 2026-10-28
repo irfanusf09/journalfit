@@ -15,6 +15,7 @@ from .http import FetchError, HttpClient
 from .metrics.publishers import PageFetcher, load_overrides, scrape_metrics
 from .models import Candidate, Journal, Manuscript, Metrics
 from .similarity import tfidf_similarities, top_terms
+from .sources.crossref import review_speed
 from .sources.indexing import IndexingData, norm_issn
 from .sources.openalex import OpenAlex, Work
 
@@ -172,6 +173,8 @@ class Finder:
                 trace.note("    using AI metrics remembered from an earlier run")
             scraped, pages = scrape_metrics(j, self.fetcher)
             j.metrics.merge(scraped)
+            if j.metrics.days_to_acceptance is None:
+                self._crossref_speed(j)
             missing = j.metrics.days_to_first_decision is None or \
                 (criteria.min_acceptance_rate is not None and j.metrics.acceptance_rate is None)
             if web_lookup and self.llm and missing and not cached and i <= lookup_top:
@@ -187,6 +190,18 @@ class Finder:
             elif web_lookup and self.llm and missing and not cached:
                 trace.note(f"    no AI lookup (only the best {lookup_top} journals get one)")
         cache.save()
+
+    def _crossref_speed(self, j: Journal) -> None:
+        """Submission-to-acceptance time from received/accepted dates publishers record in Crossref."""
+        for issn in j.issns[:2]:
+            got = review_speed(issn, self.http)
+            if got:
+                days, n = got
+                j.metrics.days_to_acceptance = days
+                j.metrics.sources["days_to_acceptance"] = f"Crossref: median of {n} recent papers (received to accepted)"
+                trace.note(f"    Crossref: median {days:g} days from submission to acceptance ({n} papers)")
+                return
+        trace.note("    Crossref: too few recent papers record received/accepted dates")
 
     # ---------------------------------------------------------------- pipeline
     def find(self, ms: Manuscript, criteria: Criteria, top: int = 10, metrics_for: int = 25,
