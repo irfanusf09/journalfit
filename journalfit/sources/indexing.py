@@ -49,6 +49,8 @@ class IndexRecord:
     h_index: int | None = None
     citescore: float | None = None
     active: bool | None = None
+    is_oa: bool | None = None
+    last_year: int | None = None  # last year of Scopus coverage
     categories: list[str] = field(default_factory=list)
     origin: str = ""
 
@@ -83,6 +85,9 @@ class IndexingData:
             journal.scopus_active = sco.active if sco else None
         elif self.scimago:
             journal.scopus_indexed = sci is not None
+            journal.scopus_active = sci.active if sci else None
+        if sci and sci.is_oa:
+            journal.is_oa = True  # SCImago flags fully open-access titles
         if sco:
             journal.metrics.merge(Metrics(citescore=sco.citescore), origin="Scopus Source List")
         if sci:
@@ -108,13 +113,26 @@ def parse_scimago(text: str) -> dict[str, IndexRecord]:
             quartile=q if q in config.QUARTILE_ORDER else None,
             h_index=int(h) if h is not None else None,
             categories=[re.sub(r"\s*\(Q\d\)$", "", c).strip() for c in (row.get("Categories") or "").split(";") if c.strip()],
+            is_oa=_yes(row.get("Open Access")),
+            last_year=max((int(y) for y in re.findall(r"\d{4}", row.get("Coverage") or "")), default=None),
             origin="scimago",
         )
         for issn in (row.get("Issn") or "").split(","):
             n = norm_issn(issn)
             if n:
                 out[n] = rec
+    # Coverage that stopped before the latest year in the file means Scopus no longer indexes it.
+    latest = max((r.last_year for r in out.values() if r.last_year), default=None)
+    if latest:
+        for r in out.values():
+            if r.last_year:
+                r.active = r.last_year >= latest - 1
     return out
+
+
+def _yes(v) -> bool | None:
+    v = (v or "").strip().lower()
+    return True if v == "yes" else False if v == "no" else None
 
 
 def parse_scopus_xlsx(path: Path) -> dict[str, IndexRecord]:

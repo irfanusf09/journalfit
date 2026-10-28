@@ -237,3 +237,28 @@ def test_report_roundtrip(tmp_path, monkeypatch):
     c = candidate_from_dict(data["ranked"][0])
     assert c.journal.name == res.ranked[0].journal.name
     assert "## 1." in (tmp_path / "out" / "shortlist.md").read_text()
+
+
+SCIMAGO_2025 = (
+    "Rank;Sourceid;Title;Type;Issn;Publisher;Open Access;Open Access Diamond;SJR;SJR Best Quartile;H index;"
+    "Total Docs. (2025);Country;Region;Publisher;Coverage;Categories\n"
+    '1;1;Carbon;journal;"00086223, 18733891";Elsevier;No;No;2,171;Q1;300;900;UK;Europe;Elsevier;1963-2025;Materials (Q1)\n'
+    '2;2;Batteries;journal;"23130105";MDPI;Yes;No;0,9;Q2;40;300;CH;Europe;MDPI;2015-2025;Energy (Q2)\n'
+    '3;3;Old Journal;journal;"11112222";X;No;No;0,3;Q3;20;0;US;NA;X;1990-2001, 2003-2019;Misc (Q3)\n'
+)
+
+
+def test_scimago_2025_layout_oa_and_coverage():
+    data = parse_scimago(SCIMAGO_2025)
+    assert data["00086223"].quartile == "Q1" and data["00086223"].is_oa is False
+    assert data["23130105"].is_oa is True
+    assert data["00086223"].active is True and data["11112222"].active is False
+    idx = IndexingData()
+    idx.scimago = data
+    j = Journal("S", "Batteries", issns=["2313-0105"])
+    idx.annotate(j)
+    assert j.is_oa is True and j.scopus_active is True
+    old = Journal("O", "Old Journal", issns=["1111-2222"])
+    idx.annotate(old)
+    f = Finder.__new__(Finder)
+    assert f.apply_static_filters(Candidate(journal=old), Criteria(scopus=True), set()) == "discontinued in Scopus"
