@@ -37,7 +37,7 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
                 from .http import HttpClient
                 from .metrics.publishers import PageFetcher, find_guidelines_text
 
-                fetcher = PageFetcher(http or HttpClient())
+                fetcher = PageFetcher(http or HttpClient(), remote=getattr(llm, "fetch_text", None))
                 try:
                     url, page = find_guidelines_text(j, fetcher)
                 finally:

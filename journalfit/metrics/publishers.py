@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import csv
 import re
+from html import escape
 from typing import Callable
 from urllib.parse import urlparse
 
 from .. import config
 from .. import trace
-from ..http import FetchError, HttpClient
+from ..http import USER_AGENT, FetchError, HttpClient
 from ..models import Journal, Metrics
 from .extract import extract_metrics, page_text
 
@@ -38,7 +39,7 @@ def springer_urls(j: Journal) -> list[str]:
     m = re.search(r"(?:link\.springer\.com|springer\.com)/journal/(\d+)", j.homepage)
     if m:
         urls.append(f"https://link.springer.com/journal/{m.group(1)}")
-        urls.append(f"https://link.springer.com/journal/{m.group(1)}/journal-metrics")
+        urls.append(f"https://link.springer.com/journal/{m.group(1)}?detailsPage=aboutThis")
     elif j.homepage:
         urls.append(j.homepage)
     return urls
@@ -53,11 +54,9 @@ def tandf_urls(j: Journal) -> list[str]:
 
 
 def wiley_urls(j: Journal) -> list[str]:
-    issn = j.issns[-1] if j.issns else ""
-    urls = [j.homepage] if j.homepage else []
-    if issn:
-        urls.append(f"https://onlinelibrary.wiley.com/journal/{issn.replace('-', '')}")
-    return urls
+    m = re.search(r"wiley\.com/journal/(\d{7}[\dXx])", j.homepage)
+    jid = m.group(1) if m else (j.issns[-1].replace("-", "") if j.issns else "")
+    return [f"https://onlinelibrary.wiley.com/journal/{jid}/journal-metrics"] if jid else []
 
 
 def mdpi_urls(j: Journal) -> list[str]:
@@ -90,28 +89,56 @@ def candidate_urls(j: Journal) -> list[str]:
 
 
 class PageFetcher:
-    """Fetches HTML via HTTP, falling back to a headless browser when blocked."""
+    """Fetches a journal page, respecting sites that refuse automated access.
 
-    def __init__(self, http: HttpClient, use_browser: bool = True):
+    Order: plain HTTP; a headless browser only when the page loaded but needs
+    JavaScript to show its content; then an optional remote reader (the AI
+    provider's own fetch service). A site that blocks us (HTTP 403 or a bot
+    check) is not retried in ways meant to get around the block.
+
+    A page counts only if it is the real page: not a block page, not a tiny
+    redirect stub, and (when `expect` is given) it mentions the journal.
+    """
+
+    def __init__(self, http: HttpClient, use_browser: bool = True, remote: Callable[[str], str] | None = None):
         self.http = http
         self.use_browser = use_browser
+        self.remote = remote
         self._pw = None
         self._browser = None
 
-    def get(self, url: str) -> str | None:
+    def get(self, url: str, expect: list[str] | None = None) -> str | None:
+        blocked = False
         try:
             html = self.http.get_text(url)
-            if not _looks_blocked(html):
+            why = _reject(html, expect)
+            if not why:
                 trace.note(f"    fetched {url} ({len(html):,} chars)")
                 return html
-            trace.note(f"    {url}: bot check page, trying browser")
+            trace.note(f"    {url}: {why}")
+            blocked = why == BLOCKED
+            if self.use_browser and why.startswith("too short"):  # JavaScript page: render it normally
+                html = self._browser_get(url)
+                why = _reject(html, expect) if html else "failed to load"
+                trace.note(f"    browser {url}: " + (why or f"ok ({len(html):,} chars)"))
+                if not why:
+                    return html
         except FetchError as e:
-            trace.note(f"    {url}: {e}")
-        if not self.use_browser:
-            return None
-        html = self._browser_get(url)
-        trace.note(f"    browser {url}: " + (f"ok ({len(html):,} chars)" if html else "blocked or failed"))
-        return html
+            blocked = "HTTP 403" in str(e) or "HTTP 429" in str(e)
+            trace.note(f"    {url}: {e}" + (" (site refuses automated access)" if blocked else ""))
+        if self.remote and not blocked:  # a site that refused us isn't fetched through someone else
+            try:
+                text = self.remote(url)
+            except Exception as e:
+                text = ""
+                trace.note(f"    remote reader {url}: {e}")
+            if text:
+                html = "<html><body>" + escape(text) + "</body></html>"
+                why = _reject(html, expect)
+                trace.note(f"    remote reader {url}: " + (why or f"ok ({len(text):,} chars)"))
+                if not why:
+                    return html
+        return None
 
     def _browser_get(self, url: str) -> str | None:
         try:
@@ -120,14 +147,13 @@ class PageFetcher:
 
                 self._pw = sync_playwright().start()
                 self._browser = self._pw.chromium.launch()
-            page = self._browser.new_page()
+            page = self._browser.new_page(user_agent=USER_AGENT)
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2500)  # let client-side metric widgets render
-                html = page.content()
+                return page.content()
             finally:
                 page.close()
-            return None if _looks_blocked(html) else html
         except Exception:
             return None
 
@@ -138,18 +164,47 @@ class PageFetcher:
             self._pw.stop()
 
 
+BLOCKED = "site refuses automated access (bot check)"
+BLOCK_MARKERS = ("just a moment", "attention required", "access denied", "are you a robot", "captcha",
+                 "verify you are human", "unusual traffic", "checking your browser", "pardon our interruption")
+
+
 def _looks_blocked(html: str) -> bool:
-    head = html[:5000].lower()
-    return any(s in head for s in ("just a moment...", "attention required", "access denied",
-                                   "are you a robot", "captcha"))
+    head = html[:20000].lower()
+    return any(s in head for s in BLOCK_MARKERS)
+
+
+def journal_markers(j: Journal) -> list[str]:
+    """Strings that the journal's own pages are expected to contain."""
+    name = re.sub(r"\s+", " ", j.name).strip()
+    marks = [name, name.replace("&", "and"), name.replace(" and ", " & ")]
+    if ":" in name:
+        marks.append(name.split(":")[0])
+    marks += j.issns
+    return [m for m in dict.fromkeys(marks) if m]
+
+
+def _reject(html: str, expect: list[str] | None) -> str:
+    """Why this isn't the real journal page ("" if it is)."""
+    if _looks_blocked(html):
+        return BLOCKED
+    text = page_text(html)
+    if len(text) < 1500:
+        return f"too short to be the journal page ({len(text):,} chars of text; probably a redirect)"
+    if expect:
+        low = text.lower()
+        if not any(e.lower() in low for e in expect):
+            return "page doesn't mention this journal (wrong or placeholder page)"
+    return ""
 
 
 def scrape_metrics(j: Journal, fetcher: PageFetcher) -> tuple[Metrics, dict[str, str]]:
     """Metrics found on the publisher pages, plus the page texts (for AI reading)."""
     found = Metrics()
     pages: dict[str, str] = {}
+    expect = journal_markers(j)
     for url in candidate_urls(j):
-        html = fetcher.get(url)
+        html = fetcher.get(url, expect)
         if not html:
             continue
         pages[url] = page_text(html)
@@ -193,9 +248,10 @@ def find_guidelines_text(j: Journal, fetcher: PageFetcher) -> tuple[str, str]:
     from bs4 import BeautifulSoup
 
     tried = set()
+    expect = journal_markers(j)
     for url in guideline_urls(j):
         tried.add(url)
-        html = fetcher.get(url)
+        html = fetcher.get(url, expect)
         if html:
             return url, page_text(html)
     if not j.homepage:

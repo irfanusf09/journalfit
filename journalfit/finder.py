@@ -38,7 +38,8 @@ class Finder:
         self.oa = OpenAlex(http)
         self.llm = llm
         self.indexing = indexing or IndexingData.load()
-        self.fetcher = PageFetcher(http, use_browser=use_browser)
+        # The AI provider's own page reader (DeepSeek Fetch) helps with pages that need it.
+        self.fetcher = PageFetcher(http, use_browser=use_browser, remote=getattr(llm, "fetch_text", None))
         self.log = log
 
     # ---------------------------------------------------------------- stage 1
@@ -189,7 +190,7 @@ class Finder:
 
     # ---------------------------------------------------------------- pipeline
     def find(self, ms: Manuscript, criteria: Criteria, top: int = 10, metrics_for: int = 25,
-             web_lookup: bool = True, lookup_top: int = 8) -> FindResult:
+             web_lookup: bool = True, lookup_top: int | None = None) -> FindResult:
         notes: list[str] = []
         trace.start()
         if criteria.scopus and not self.indexing.available:
@@ -222,6 +223,8 @@ class Finder:
         survivors.sort(key=lambda c: -(c.text_fit + 0.1 * min(c.reference_hits, 5)))
         shortlist = survivors[:metrics_for]
         self.log("Collecting editorial metrics...")
+        if lookup_top is None:  # cheap providers can afford to check more journals
+            lookup_top = getattr(self.llm, "lookup_top", 8)
         self.collect_metrics(shortlist, criteria, web_lookup, lookup_top)
         self.fetcher.close()
 

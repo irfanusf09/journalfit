@@ -508,6 +508,65 @@ OFFICIAL_HOSTS = (
 )
 
 
+PUBLISHER_HOSTS = [
+    (r"elsevier|cell press", ("sciencedirect.com", "elsevier.com", "cell.com")),
+    (r"springer|palgrave|nature|bmc|biomed central", ("springer.com", "springernature.com", "nature.com",
+                                                     "biomedcentral.com", "palgrave.com")),
+    (r"wiley|hindawi", ("wiley.com", "hindawi.com")),
+    (r"taylor|francis|routledge", ("tandfonline.com", "taylorandfrancis.com")),
+    (r"sage", ("sagepub.com",)),
+    (r"emerald", ("emerald.com", "emeraldinsight.com")),
+    (r"informs|operations research", ("informs.org",)),
+    (r"mdpi", ("mdpi.com",)),
+    (r"oxford", ("oup.com",)),
+    (r"cambridge", ("cambridge.org",)),
+    (r"ieee", ("ieee.org",)),
+    (r"american chemical", ("acs.org",)),
+    (r"royal society of chemistry", ("rsc.org",)),
+    (r"frontiers", ("frontiersin.org",)),
+    (r"de gruyter", ("degruyter.com",)),
+    (r"iop", ("iop.org",)),
+    (r"inderscience", ("inderscience.com",)),
+]
+
+
+def publisher_hosts(j: Journal) -> tuple[str, ...]:
+    """Domains that count as the journal's own: its homepage plus its publisher's sites."""
+    from urllib.parse import urlparse
+
+    hosts = []
+    if j.homepage:
+        hosts.append(urlparse(j.homepage).netloc.lower().removeprefix("www."))
+    for pattern, domains in PUBLISHER_HOSTS:
+        if re.search(pattern, j.publisher or "", re.I):
+            hosts.extend(domains)
+    return tuple(h for h in dict.fromkeys(hosts) if h) or OFFICIAL_HOSTS
+
+
+def _clean_url(url: str) -> str:
+    """Drop #fragments and tracking parameters that search results carry."""
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    if not url:
+        return ""
+    u = urlparse(url)
+    q = [(k, v) for k, v in parse_qsl(u.query) if not k.lower().startswith(("utm_", "gad_", "gclid", "fbclid"))]
+    return urlunparse(u._replace(query=urlencode(q), fragment=""))
+
+
+def _is_journal_info_url(url: str, hosts: tuple[str, ...]) -> bool:
+    from urllib.parse import urlparse
+
+    u = urlparse(url)
+    host = u.netloc.lower()
+    if not any(host == h or host.endswith("." + h) for h in hosts):
+        return False
+    path = u.path.lower()
+    # Individual articles, PDFs, login/redirect hops and proxies don't carry journal metrics.
+    return not (path.endswith(".pdf") or "/content/pdf/" in path or "/doi/" in path or "/article/" in path
+                or host.startswith(("idp.", "login.", "auth.")) or "webvpn" in host or "transit" in path)
+
+
 class DeepSeek(LLM):
     """DeepSeek chat model, with DeepSeek's Search and Fetch APIs for reading official pages.
 
@@ -517,6 +576,7 @@ class DeepSeek(LLM):
 
     provider = "deepseek"
     has_web = False
+    lookup_top = 20  # searches cost ~$0.001, so check more journals
     URL = "https://api.deepseek.com/chat/completions"
     SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
     FETCH_URL = "https://api.deepseek.com/v1/tools/fetch"
@@ -538,29 +598,35 @@ class DeepSeek(LLM):
             trace.note(f"    DeepSeek {what}: response was not JSON: {r.text[:200]!r}")
             return None
 
+    def fetch_text(self, url: str) -> str:
+        """Page text via DeepSeek's Fetch API ("" if it couldn't read it)."""
+        got = self._tool(self.FETCH_URL, {"url": url})
+        return _find_text(got or {})
+
     def web_pages(self, query, j, limit=2, skip=None):
-        from urllib.parse import urlparse
+        from .metrics.publishers import journal_markers
 
         data = self._tool(self.SEARCH_URL, {"query": query[:128], "count": 10})
         results = _find_list(data or {})
         trace.note(f"    DeepSeek search '{query[:80]}': {len(results)} results"
                    + ("" if results or data is None else f"; response keys: {list(data)[:10] if isinstance(data, dict) else type(data).__name__}"))
-        for r in results[:10]:
-            trace.note(f"      - {r.get('url') or r.get('link') or sorted(r)[:6]}")
-        own = urlparse(j.homepage).netloc.lower().removeprefix("www.") if j.homepage else ""
+        hosts = publisher_hosts(j)
         official = []
         for r in results:
-            url = r.get("url") or r.get("link") or ""
-            host = urlparse(url).netloc.lower()
-            if url and url not in (skip or set()) and ((own and own in host) or host.endswith(OFFICIAL_HOSTS)):
+            url = _clean_url(r.get("url") or r.get("link") or "")
+            ok = url and url not in (skip or set()) and _is_journal_info_url(url, hosts)
+            trace.note(f"      {'+' if ok else '-'} {url or sorted(r)[:6]}")
+            if ok and url not in official:
                 official.append(url)
+        trace.note(f"    publisher pages kept: {official[:limit] or 'none'}")
+        marks = [m.lower() for m in journal_markers(j)]
         pages: dict[str, str] = {}
-        trace.note(f"    official pages kept: {official[:limit] or 'none'}")
         for url in official[:limit]:
-            got = self._tool(self.FETCH_URL, {"url": url})
-            text = _find_text(got or {})
-            trace.note(f"    DeepSeek fetch {url}: " + (f"{len(text):,} chars" if text else
-                       f"no text; response keys: {list(got)[:10] if isinstance(got, dict) else got!r:.100}"))
+            text = self.fetch_text(url)
+            if text and not any(m in text.lower() for m in marks):
+                trace.note(f"    DeepSeek fetch {url}: page is about a different journal, ignored")
+                continue
+            trace.note(f"    DeepSeek fetch {url}: " + (f"{len(text):,} chars" if text else "no text"))
             if text:
                 pages[url] = text
         return pages

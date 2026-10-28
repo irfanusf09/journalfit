@@ -18,10 +18,8 @@ from urllib3.util.retry import Retry
 
 from . import config
 
-BROWSER_UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0 Safari/537.36"
-)
+# Identify the tool honestly; sites that don't want automated visitors can say so.
+USER_AGENT = "JournalFit/0.1 (journal-selection helper; +https://github.com/irfanusf09/journalfit)"
 DEFAULT_TTL = 7 * 24 * 3600
 
 
@@ -42,7 +40,7 @@ class HttpClient:
         )
         self.session.mount("https://", HTTPAdapter(max_retries=retry, pool_maxsize=16))
         self.session.mount("http://", HTTPAdapter(max_retries=retry, pool_maxsize=16))
-        self.session.headers["User-Agent"] = BROWSER_UA
+        self.session.headers["User-Agent"] = USER_AGENT
         if cache_path is None:
             config.ensure_data_dir()
             cache_path = config.CACHE_PATH

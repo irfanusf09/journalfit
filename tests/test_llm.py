@@ -146,20 +146,24 @@ def test_deepseek_searches_official_pages_and_reads_them(monkeypatch):
     post = RoutedPost({
         DeepSeek.SEARCH_URL: {"results": [
             {"url": "https://someblog.example/journal-metrics", "title": "aggregator"},
-            {"url": "https://link.springer.com/journal/1", "title": "J"},
+            {"url": "https://journals.sagepub.com/overview-metric/dus", "title": "another publisher"},
+            {"url": "https://link.springer.com/content/pdf/10.1007/x.pdf#1#1", "title": "an article PDF"},
+            {"url": "https://idp.springer.com/transit?redirect_uri=x", "title": "login hop"},
+            {"url": "https://link.springer.com/journal/1?utm_source=g#1", "title": "J"},
             {"url": "https://www.myjournal.org/about", "title": "own site"},
         ]},
-        DeepSeek.FETCH_URL: lambda body: {"data": {"content": f"PAGE {body['url']}: first decision 21 days"}},
+        DeepSeek.FETCH_URL: lambda body: {"data": {"content": f"Journal of Things. PAGE {body['url']}: first decision 21 days"}},
         DeepSeek.URL: {"choices": [{"message": {"content": METRIC_ANSWER}}],
                        "usage": {"prompt_tokens": 3000, "completion_tokens": 50}},
     })
     monkeypatch.setattr(llm_mod.requests, "post", post)
     d = DeepSeek("deepseek-flash", "sk-d")
-    j = Journal("S", "J", homepage="https://myjournal.org")
+    j = Journal("S", "Journal of Things", publisher="Springer Nature", homepage="https://myjournal.org")
     m = d.lookup_metrics(j, {"https://pub/j": "scraped page text"})
     assert m.days_to_first_decision == 21 and m.acceptance_rate == 30
     fetched = [c["json"]["url"] for c in post.calls if c["url"] == DeepSeek.FETCH_URL]
-    assert fetched == ["https://link.springer.com/journal/1", "https://www.myjournal.org/about"]  # no aggregator
+    # Only the journal's own publisher pages: no aggregator, other publisher, article PDF or login hop.
+    assert fetched == ["https://link.springer.com/journal/1", "https://www.myjournal.org/about"]
     prompt = [c for c in post.calls if c["url"] == DeepSeek.URL][0]["json"]["messages"][1]["content"]
     assert "scraped page text" in prompt and "PAGE https://link.springer.com/journal/1" in prompt
     assert d.cost.searches == 3 and d.cost.calls == 1 and not d.cost.unknown_price
@@ -219,3 +223,13 @@ def test_haiku_uses_basic_web_tools():
     c.with_web("s", "p")
     assert msgs.calls[0]["tools"][0]["type"] == "web_search_20250305"
     assert "fallbacks" not in msgs.calls[0]
+
+
+def test_deepseek_ignores_pages_about_another_journal(monkeypatch):
+    post = RoutedPost({
+        DeepSeek.SEARCH_URL: {"results": [{"url": "https://link.springer.com/journal/2"}]},
+        DeepSeek.FETCH_URL: {"content": "Journal of Something Else: first decision 5 days"},
+    })
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    d = DeepSeek("deepseek-flash", "k")
+    assert d.web_pages("q", Journal("S", "Journal of Things", publisher="Springer")) == {}

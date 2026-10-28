@@ -159,10 +159,20 @@ SOURCES = {
     "S3": _src("S3", "Batteries", "MDPI", "2313-0105", "https://www.mdpi.com/journal/batteries", is_oa=True),
     "S4": _src("S4", "Slow Journal", "Springer", "1234-5679", "http://link.springer.com/journal/99999"),
 }
+FILLER = "<p>" + "About the journal, aims and scope, editorial board and publishing information. " * 25 + "</p>"
+
+
+def _page(name, body):
+    return f"<html><body><h1>{name}</h1>{FILLER}{body}</body></html>"
+
+
 PAGES = {
-    "https://www.sciencedirect.com/journal/carbon/about/insights": "<p>Review time 4 weeks</p><p>Acceptance rate 25%</p>",
-    "https://link.springer.com/journal/10853": "<div>Submission to first decision (median) 30 days</div>",
-    "https://link.springer.com/journal/99999": "<div>Submission to first decision (median) 200 days</div>",
+    "https://www.sciencedirect.com/journal/carbon/about/insights":
+        _page("Carbon", "<p>Review time 4 weeks</p><p>Acceptance rate 25%</p>"),
+    "https://link.springer.com/journal/10853":
+        _page("Journal of Materials Science", "<div>Submission to first decision (median) 30 days</div>"),
+    "https://link.springer.com/journal/99999":
+        _page("Slow Journal", "<div>Submission to first decision (median) 200 days</div>"),
 }
 
 
@@ -301,3 +311,37 @@ def test_cache_keeps_only_real_findings(tmp_path):
     c.put("empty", Metrics())
     c.put("full", Metrics(acceptance_rate=20.0, sources={"acceptance_rate": "x"}))
     assert c.get("empty") is None and c.get("full").acceptance_rate == 20
+
+
+def test_fetcher_rejects_stubs_wrong_pages_and_respects_blocks():
+    from journalfit.metrics.publishers import PageFetcher, journal_markers
+
+    class Http:
+        pages = {
+            "https://ok": _page("Carbon", ""),
+            "https://stub": "<html><body>Redirecting...</body></html>",
+            "https://other": _page("Some Other Journal", ""),
+            "https://botcheck": "<html><title>Just a moment...</title></html>",
+        }
+
+        def get_text(self, url, **kw):
+            if url == "https://forbidden":
+                raise FetchError(f"{url}: HTTP 403")
+            return self.pages[url]
+
+    remote_calls = []
+
+    def remote(url):
+        remote_calls.append(url)
+        return "Carbon. " + "Journal information text. " * 100
+
+    f = PageFetcher(Http(), use_browser=False, remote=remote)
+    expect = journal_markers(Journal("S", "Carbon", issns=["0008-6223"]))
+    assert f.get("https://ok", expect)
+    assert f.get("https://other", expect) is not None  # wrong page locally -> remote reader's copy is used
+    assert remote_calls == ["https://other"]
+    assert f.get("https://stub", expect) is not None and remote_calls[-1] == "https://stub"
+    # Sites that refuse automated access are not fetched another way.
+    assert f.get("https://forbidden", expect) is None
+    assert f.get("https://botcheck", expect) is None
+    assert remote_calls == ["https://other", "https://stub"]

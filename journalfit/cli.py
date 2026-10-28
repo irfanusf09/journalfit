@@ -53,7 +53,7 @@ def add_filter_args(p: argparse.ArgumentParser) -> None:
     r.add_argument("--no-llm", action="store_true", help="don't use AI (text matching and scraping only)")
     r.add_argument("--provider", choices=list(PROVIDERS), help="AI provider (default: the one in Settings)")
     r.add_argument("--model", help="override the provider's model name")
-    r.add_argument("--lookup-top", type=int, default=8, help="AI metric lookups for the best N journals (default 8)")
+    r.add_argument("--lookup-top", type=int, help="AI metric lookups for the best N journals (default 8; 20 for DeepSeek)")
     r.add_argument("--no-web-lookup", action="store_true", help="don't let the AI look up missing metrics")
     r.add_argument("--no-browser", action="store_true", help="don't use a headless browser for blocked pages")
     r.add_argument("--out", default="submissions", help="output folder (default ./submissions)")
@@ -218,16 +218,12 @@ def cmd_data(a):
             if not _is_scimago_csv(tmp):
                 raise RuntimeError("got a web page instead of the data file")
         except Exception as e:
-            _log(f"  direct download blocked ({e}); retrying with a browser...")
-            try:
-                _download_scimago_with_browser(tmp)
-            except Exception as e2:
-                tmp.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"Could not download the SCImago list automatically ({e2}).\n"
-                    "Download it yourself: open https://www.scimagojr.com/journalrank.php, click "
-                    "'Download data', then run:\n  journalfit data import-scimago ~/Downloads/scimagojr*.csv"
-                )
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"SCImago doesn't allow automatic downloads ({e}).\n"
+                "Download it yourself: open https://www.scimagojr.com/journalrank.php, click "
+                "'Download data', then run:\n  journalfit data import-scimago ~/Downloads/scimagojr*.csv"
+            )
         tmp.replace(config.SCIMAGO_PATH)
     elif a.action == "import-scimago":
         if not a.file or not _is_scimago_csv(Path(a.file)):
@@ -257,24 +253,6 @@ def _is_scimago_csv(path: Path) -> bool:
     except OSError:
         return False
     return head.lstrip("﻿").startswith("Rank;") and "Issn" in head
-
-
-def _download_scimago_with_browser(dest: Path) -> None:
-    """SCImago blocks scripted downloads; a real browser clicking 'Download data' works."""
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)  # visible: bot checks often block headless
-        try:
-            page = browser.new_page()
-            page.goto("https://www.scimagojr.com/journalrank.php", timeout=60000)
-            with page.expect_download(timeout=120000) as dl:
-                page.get_by_text("Download data").first.click(timeout=60000)
-            dl.value.save_as(str(dest))
-        finally:
-            browser.close()
-    if not _is_scimago_csv(dest):
-        raise RuntimeError("downloaded file is not the SCImago CSV")
 
 
 def main(argv=None):
