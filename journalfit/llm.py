@@ -29,9 +29,10 @@ PRICES = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "gpt-5-mini": (0.25, 2.00),
     "gemini-flash-latest": (0.75, 3.75),
-    "deepseek-chat": (0.14, 0.28),
+    "deepseek-flash": (0.30, 1.20),  # peak rates; off-peak is half
+    "deepseek-v4-pro": (1.32, 3.96),
 }
-SEARCH_PRICE = {"anthropic": 0.010, "openai": 0.010, "gemini": 0.014, "deepseek": 0.0}
+SEARCH_PRICE = {"anthropic": 0.010, "openai": 0.010, "gemini": 0.014, "deepseek": 0.00075}
 
 PROVIDERS = {
     # id: (label, default model, key setting / env var)
@@ -40,7 +41,7 @@ PROVIDERS = {
     "claude-opus": ("Claude Opus 5.5: best quality, highest cost", "claude-opus-5-5", "ANTHROPIC_API_KEY"),
     "openai": ("OpenAI (ChatGPT API)", "gpt-5-mini", "OPENAI_API_KEY"),
     "gemini": ("Google Gemini", "gemini-flash-latest", "GEMINI_API_KEY"),
-    "deepseek": ("DeepSeek: cheapest, no web search", "deepseek-chat", "DEEPSEEK_API_KEY"),
+    "deepseek": ("DeepSeek: cheapest", "deepseek-flash", "DEEPSEEK_API_KEY"),
 }
 
 
@@ -69,9 +70,14 @@ class Cost:
             self.usd += inp / 1e6 * price[0] + out / 1e6 * price[1]
         self.usd += searches * SEARCH_PRICE.get(provider, 0.0)
 
+    def add_requests(self, provider: str, n: int = 1) -> None:
+        """Per-request web search/fetch fees billed outside model calls."""
+        self.searches += n
+        self.usd += n * SEARCH_PRICE.get(provider, 0.0)
+
     def summary(self) -> str:
         s = (f"AI usage: {self.calls} calls, {self.input_tokens:,} input + {self.output_tokens:,} output tokens"
-             + (f", {self.searches} web searches" if self.searches else "")
+             + (f", {self.searches} web searches/page reads" if self.searches else "")
              + f". Estimated cost: ${self.usd:.2f}")
         if self.unknown_price:
             s += f" (plus {', '.join(sorted(self.unknown_price))}, price unknown)"
@@ -157,6 +163,10 @@ class LLM:
     def with_web(self, system: str, prompt: str, effort: str = "medium") -> str:
         raise NotImplementedError
 
+    def web_pages(self, query: str, j: Journal, limit: int = 2, skip: set | None = None) -> dict[str, str]:
+        """For providers without built-in web search: {url: text} of official pages found by search."""
+        return {}
+
     # -- steps --------------------------------------------------------------
 
     def profile_manuscript(self, ms: Manuscript) -> None:
@@ -224,6 +234,9 @@ class LLM:
         if self.has_web:
             text = self.with_web(system, head + ask, effort="low")
         else:
+            pages = dict(pages or {})
+            pages.update(self.web_pages(
+                f"{j.name} journal submission to first decision acceptance rate", j, limit=2, skip=set(pages)))
             if not pages:
                 return Metrics()
             docs = "\n\n".join(f"<page url=\"{u}\">\n{t[:15000]}\n</page>" for u, t in pages.items())
@@ -257,7 +270,10 @@ class LLM:
                 system, intro + "Find the journal's official author guidelines / guide for authors and read them.\n\n"
                 + facts + tail))
         if not page_text:
-            raise LLMError("could not find the author guidelines page (this provider cannot search the web)")
+            found = self.web_pages(f"{j.name} journal guide for authors submission guidelines", j, limit=1)
+            page_text = next(iter(found.values()), "")
+        if not page_text:
+            raise LLMError("could not find the journal's author guidelines page")
         return _json_from_text(json.dumps(self.structured(
             system, intro + f"<author_guidelines>\n{page_text[:40000]}\n</author_guidelines>\n\n" + facts
             + "Using only these guidelines. " + tail.replace("End your reply with a fenced json block:", "Return JSON:"),
@@ -480,10 +496,62 @@ class Gemini(LLM):
 
 # ====================================================================== DeepSeek (OpenAI-compatible chat)
 
+# Publisher and journal-host domains treated as official sources.
+OFFICIAL_HOSTS = (
+    "sciencedirect.com", "elsevier.com", "cell.com", "springer.com", "springeropen.com", "nature.com",
+    "biomedcentral.com", "tandfonline.com", "wiley.com", "mdpi.com", "sagepub.com", "ieee.org",
+    "acs.org", "rsc.org", "oup.com", "academic.oup.com", "cambridge.org", "frontiersin.org",
+    "plos.org", "emerald.com", "inderscience.com", "iop.org", "aip.org", "degruyter.com",
+    "hindawi.com", "bmj.com", "thelancet.com", "jamanetwork.com", "aps.org", "asce.org", "asme.org",
+    "taylorfrancis.com", "routledge.com", "karger.com", "thieme.com", "lww.com", "aaas.org", "science.org",
+)
+
+
 class DeepSeek(LLM):
+    """DeepSeek chat model, with DeepSeek's Search and Fetch APIs for reading official pages.
+
+    The model has no built-in web tool here, so the tool searches, keeps official
+    publisher pages, fetches them and gives their text to the model.
+    """
+
     provider = "deepseek"
     has_web = False
     URL = "https://api.deepseek.com/chat/completions"
+    SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
+    FETCH_URL = "https://api.deepseek.com/v1/tools/fetch"
+
+    def _tool(self, url: str, body: dict) -> dict | None:
+        try:
+            r = requests.post(url, json=body, timeout=60, headers={"Authorization": f"Bearer {self.key}"})
+        except requests.RequestException:
+            return None
+        if r.status_code != 200:
+            return None
+        self.cost.add_requests(self.provider)
+        try:
+            return r.json()
+        except ValueError:
+            return None
+
+    def web_pages(self, query, j, limit=2, skip=None):
+        from urllib.parse import urlparse
+
+        data = self._tool(self.SEARCH_URL, {"query": query[:128], "count": 10})
+        results = _find_list(data or {})
+        own = urlparse(j.homepage).netloc.lower().removeprefix("www.") if j.homepage else ""
+        official = []
+        for r in results:
+            url = r.get("url") or r.get("link") or ""
+            host = urlparse(url).netloc.lower()
+            if url and url not in (skip or set()) and ((own and own in host) or host.endswith(OFFICIAL_HOSTS)):
+                official.append(url)
+        pages: dict[str, str] = {}
+        for url in official[:limit]:
+            got = self._tool(self.FETCH_URL, {"url": url})
+            text = _find_text(got or {})
+            if text:
+                pages[url] = text
+        return pages
 
     def __init__(self, model: str, api_key: str):
         self.model, self.key, self.name = model, api_key, "DeepSeek"
@@ -497,7 +565,7 @@ class DeepSeek(LLM):
                  + json.dumps(schema)},
             ],
             "response_format": {"type": "json_object"},
-            "max_tokens": 8000,
+            "max_tokens": 32000,  # room for thinking (on by default) plus the answer
         }
         try:
             r = requests.post(self.URL, json=body, timeout=600, headers={"Authorization": f"Bearer {self.key}"})
@@ -517,6 +585,30 @@ class DeepSeek(LLM):
         if missing:
             raise LLMError(f"DeepSeek answer was missing {', '.join(missing)}")
         return out
+
+
+def _find_list(d) -> list[dict]:
+    """Search results under whichever key the API uses ("results", "data", ...)."""
+    if isinstance(d, list):
+        return [x for x in d if isinstance(x, dict)]
+    if isinstance(d, dict):
+        for k in ("results", "data", "items", "web_results", "search_results"):
+            if k in d:
+                return _find_list(d[k])
+    return []
+
+
+def _find_text(d) -> str:
+    if isinstance(d, dict):
+        for k in ("content", "markdown", "text", "data", "result"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+            if isinstance(v, dict):
+                t = _find_text(v)
+                if t:
+                    return t
+    return ""
 
 
 def _err(r: requests.Response) -> str:

@@ -70,7 +70,7 @@ Pick one in the app's **Settings** (or with `--provider` on the command line). E
 | `claude-opus` | yes | Best quality, highest cost |
 | `openai` | yes | Default model `gpt-5-mini`, which you can change in Settings |
 | `gemini` | yes | Default model `gemini-flash-latest` |
-| `deepseek` | no | Cheapest. It reads the publisher pages the tool fetched itself, so more metrics may stay unknown |
+| `deepseek` | yes, via DeepSeek's Search & Fetch API | Cheapest. Model `deepseek-flash`. Pages are searched, filtered to official publisher sites, then read |
 
 Keys can also come from the environment variables `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` and `DEEPSEEK_API_KEY`.
 
