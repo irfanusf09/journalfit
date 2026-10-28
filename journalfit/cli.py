@@ -288,6 +288,12 @@ def main(argv=None):
     s.add_argument("--url")
     s.set_defaults(fn=cmd_assist)
 
+    ap = sub.add_parser("app", help="open the point-and-click app in your browser")
+    ap.add_argument("--shortcut", action="store_true", help="create a double-click icon on the Desktop")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.set_defaults(fn=lambda a: __import__("journalfit.app", fromlist=["main"]).main(
+        ["--shortcut"] if a.shortcut else ["--port", str(a.port)]))
+
     d = sub.add_parser("data", help="download or import journal indexing data")
     d.add_argument("action", choices=["update", "import-scimago", "import-scopus", "status"])
     d.add_argument("file", nargs="?")

@@ -11,7 +11,7 @@ from . import config
 from .config import Criteria
 from .http import FetchError, HttpClient
 from .metrics.publishers import PageFetcher, load_overrides, scrape_metrics
-from .models import Candidate, Journal, Manuscript, Metrics
+from .models import Candidate, Journal, Manuscript
 from .similarity import tfidf_similarities, top_terms
 from .sources.indexing import IndexingData, norm_issn
 from .sources.openalex import OpenAlex, Work

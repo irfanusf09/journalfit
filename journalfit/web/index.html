@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JournalFit</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dfe3ea;
+    --accent: #2457d6; --accent-text: #ffffff; --ok: #1d7a46; --warn: #9a5b00; --bad: #b42318;
+    --soft: #eef2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e7eaf0; --muted: #9aa3b2; --line: #2d3442;
+      --accent: #6b93ff; --accent-text: #0d1220; --ok: #5ccf8e; --warn: #f0b45a; --bad: #ff8a80;
+      --soft: #222a38;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between;
+           max-width: 1100px; margin: 0 auto; padding: 20px 16px 4px; }
+  header h1 { font-size: 22px; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 60px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 20px; margin: 16px 0; }
+  .card h2 { font-size: 18px; margin: 0 0 12px; display: flex; gap: 10px; align-items: center; }
+  .step { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--accent);
+          color: var(--accent-text); font-size: 14px; align-items: center; justify-content: center; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center;
+          cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--soft); }
+  .drop strong { display: block; font-size: 17px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; }
+  label.check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  label.check input { width: 18px; height: 18px; margin-top: 3px; }
+  .field label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=number], input[type=password], input[type=url], select {
+    width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--text); font: inherit; }
+  button { font: inherit; border-radius: 8px; padding: 10px 18px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+                   font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .banner { border-left: 4px solid var(--warn); }
+  .log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+         font: 13px/1.45 ui-monospace, Menlo, monospace; max-height: 220px; overflow: auto;
+         white-space: pre-wrap; color: var(--muted); }
+  .journal { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 10px 0; }
+  .journal .top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .journal h3 { margin: 0; font-size: 17px; }
+  .score { font-weight: 700; font-size: 20px; color: var(--accent); white-space: nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .chip { background: var(--soft); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+  .chip.na { color: var(--muted); }
+  .warn { color: var(--warn); font-size: 14px; }
+  .bad { color: var(--bad); }
+  .ok { color: var(--ok); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  pre.doc { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+            padding: 12px; font: 14px/1.5 inherit; max-height: 380px; overflow: auto; }
+  .hidden { display: none !important; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text);
+           width: min(560px, calc(100vw - 32px)); padding: 22px; }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog .field { margin-bottom: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>JournalFit</h1>
+    <p>Find the right journal, prepare the submission, fill in the forms.</p>
+  </div>
+  <button id="settingsBtn" title="Settings">⚙ Settings</button>
+</header>
+
+<main>
+  <!-- One-time setup: journal list -->
+  <section class="card banner hidden" id="setupCard">
+    <h2>One-time setup: journal list</h2>
+    <p>The tool needs the free SCImago journal list (journal rankings and Scopus indexing).</p>
+    <ol>
+      <li>Open <a href="https://www.scimagojr.com/journalrank.php" target="_blank" rel="noopener">scimagojr.com/journalrank.php</a>
+          and click <b>Download data</b>.</li>
+      <li>Drag the downloaded <b>.csv</b> file into the box below.</li>
+    </ol>
+    <div class="drop" id="scimagoDrop"><strong>Drop the SCImago .csv file here</strong>
+      <span class="muted">or click to choose it</span></div>
+    <input type="file" id="scimagoInput" accept=".csv" class="hidden">
+  </section>
+
+  <section class="card banner hidden" id="keyCard">
+    <h2>Optional: add your Claude API key</h2>
+    <p class="muted">Without it the tool still finds and ranks journals. With it, it also checks scope like an editor,
+      looks up missing metrics, reads author guidelines and writes your cover letter.
+      Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+    <button onclick="openSettings()">Add key in Settings</button>
+  </section>
+
+  <!-- Step 1 -->
+  <section class="card">
+    <h2><span class="step">1</span> Your manuscript</h2>
+    <div class="drop" id="msDrop"><strong id="msLabel">Drop your manuscript here</strong>
+      <span class="muted">Word (.docx), PDF, LaTeX (.tex) or text. Or click to choose.</span></div>
+    <input type="file" id="msInput" accept=".docx,.pdf,.tex,.txt,.md" class="hidden">
+  </section>
+
+  <!-- Step 2 -->
+  <section class="card">
+    <h2><span class="step">2</span> Your rules</h2>
+    <div class="grid">
+      <label class="check"><input type="checkbox" id="no_oa" checked>
+        <span>Not open access<br><span class="muted">no publishing fee (hybrid journals allowed)</span></span></label>
+      <label class="check"><input type="checkbox" id="scopus" checked>
+        <span>Scopus-indexed only<br><span class="muted">drops discontinued journals</span></span></label>
+      <label class="check"><input type="checkbox" id="skip_missing">
+        <span>Skip journals that don't publish their numbers<br>
+          <span class="muted">otherwise they're kept and marked</span></span></label>
+      <label class="check"><input type="checkbox" id="use_claude" checked>
+        <span>Use Claude<br><span class="muted">scope check, missing metrics, cover letter</span></span></label>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <div class="field"><label for="max_first_decision">First decision within (days)</label>
+        <input type="number" id="max_first_decision" value="90" min="1"></div>
+      <div class="field"><label for="min_acceptance">Acceptance rate at least (%)</label>
+        <input type="number" id="min_acceptance" value="20" min="0" max="100"></div>
+      <div class="field"><label for="min_quartile">Journal quality at least</label>
+        <select id="min_quartile"><option value="">Any</option><option>Q1</option><option selected>Q2</option>
+          <option>Q3</option><option>Q4</option></select></div>
+      <div class="field"><label for="publishers">Only these publishers (optional)</label>
+        <input type="text" id="publishers" placeholder="e.g. Springer, Elsevier"></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="findBtn" disabled>Find journals</button>
+      <span class="muted" id="findHint">Add your manuscript first.</span>
+    </div>
+    <div class="log hidden" id="findLog" style="margin-top:14px"></div>
+  </section>
+
+  <!-- Step 3 -->
+  <section class="card hidden" id="resultsCard">
+    <h2><span class="step">3</span> Best journals for your paper</h2>
+    <p class="muted" id="resultsInfo"></p>
+    <div id="results"></div>
+    <details id="excludedBox"><summary>Journals that matched the topic but broke a rule</summary>
+      <ul id="excluded" class="muted"></ul></details>
+  </section>
+
+  <!-- Step 4 -->
+  <section class="card hidden" id="pkgCard">
+    <h2><span class="step">4</span> Submission package: <span id="pkgJournal"></span></h2>
+    <div class="log hidden" id="pkgLog"></div>
+    <div id="pkgBody" class="hidden">
+      <div class="row" style="margin-top:0">
+        <button onclick="openFolder()">Open the package folder</button>
+        <span class="muted" id="pkgPath"></span>
+      </div>
+      <h3>Checklist</h3>
+      <pre class="doc" id="checklist"></pre>
+      <details id="coverBox"><summary>Cover letter (draft, please read and edit)</summary>
+        <pre class="doc" id="cover"></pre></details>
+    </div>
+  </section>
+
+  <!-- Step 5 -->
+  <section class="card hidden" id="submitCard">
+    <h2><span class="step">5</span> Fill in the journal's submission website</h2>
+    <ol class="muted">
+      <li>Click <b>Open submission website</b>. A browser window opens. Log in (only needed the first time).</li>
+      <li>Start a new submission there. On each form page, come back here and click <b>Fill this page</b>.</li>
+      <li>Check every page yourself. <b>This tool never clicks any button.</b> Only you can press Submit.</li>
+    </ol>
+    <div class="field"><label for="subUrl">Submission website</label>
+      <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/..."></div>
+    <div class="row">
+      <button class="primary" id="openSiteBtn">Open submission website</button>
+      <button id="fillBtn" disabled>Fill this page</button>
+      <button id="closeSiteBtn" disabled>Close browser</button>
+    </div>
+    <div class="log hidden" id="assistLog" style="margin-top:14px"></div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <h2 style="margin-top:0">Settings</h2>
+  <div class="field"><label for="s_key">Claude API key <span id="keyState" class="muted"></span></label>
+    <input type="password" id="s_key" placeholder="sk-ant-..." autocomplete="off"></div>
+  <div class="field"><label for="s_name">Your name (for the cover letter)</label><input type="text" id="s_name"></div>
+  <div class="field"><label for="s_aff">Your affiliation</label><input type="text" id="s_aff"></div>
+  <div class="field"><label for="s_email">Your email</label><input type="text" id="s_email"></div>
+  <p class="muted">Saved only on this computer. Results are saved in <span id="outDir"></span>.</p>
+  <div class="row" style="justify-content:space-between">
+    <button id="updateBtn">Check for updates</button>
+    <span>
+      <button onclick="document.getElementById('settings').close()">Cancel</button>
+      <button class="primary" id="saveSettings">Save</button>
+    </span>
+  </div>
+  <p class="muted" id="updateMsg" style="white-space:pre-wrap"></p>
+</dialog>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+let state = {}, manuscript = null, findJob = null, pkg = null;
+
+async function api(path, body, opts = {}) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: Object.assign({"X-Token": TOKEN}, body instanceof Blob ? {} : {"Content-Type": "application/json"}, opts.headers || {}),
+    body: body === undefined ? undefined : (body instanceof Blob ? body : JSON.stringify(body)),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function refresh() {
+  state = await api("/api/state");
+  $("setupCard").classList.toggle("hidden", state.data.scimago > 0);
+  $("keyCard").classList.toggle("hidden", state.has_api_key);
+  $("use_claude").checked = state.has_api_key;
+  $("use_claude").disabled = !state.has_api_key;
+  updateFindButton();
+}
+
+function updateFindButton() {
+  const ready = manuscript && state.data && state.data.scimago > 0;
+  $("findBtn").disabled = !ready;
+  $("findHint").textContent = !manuscript ? "Add your manuscript first." :
+    (state.data.scimago > 0 ? "" : "Finish the one-time setup above first.");
+}
+
+function setupDrop(dropId, inputId, onFile) {
+  const drop = $(dropId), input = $(inputId);
+  drop.onclick = () => input.click();
+  input.onchange = () => input.files[0] && onFile(input.files[0]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0]); };
+}
+
+async function upload(kind, file) {
+  return api("/api/upload?kind=" + kind, file, {headers: {"X-Filename": encodeURIComponent(file.name)}});
+}
+
+setupDrop("msDrop", "msInput", async (file) => {
+  try {
+    manuscript = await upload("manuscript", file);
+    $("msLabel").textContent = "✓ " + manuscript.name;
+  } catch (e) { alert(e.message); }
+  updateFindButton();
+});
+
+setupDrop("scimagoDrop", "scimagoInput", async (file) => {
+  try {
+    const d = await upload("scimago", file);
+    alert(`Journal list loaded: ${d.scimago.toLocaleString()} journals.`);
+    refresh();
+  } catch (e) { alert(e.message); }
+});
+
+async function poll(jobId, logEl, onDone) {
+  logEl.classList.remove("hidden");
+  for (;;) {
+    const j = await api("/api/job/" + jobId);
+    logEl.textContent = j.log.join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+    if (j.status !== "running") return onDone(j);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+$("findBtn").onclick = async () => {
+  $("findBtn").disabled = true;
+  $("resultsCard").classList.add("hidden");
+  const criteria = {
+    no_oa: $("no_oa").checked, scopus: $("scopus").checked, skip_missing: $("skip_missing").checked,
+    max_first_decision: $("max_first_decision").value, min_acceptance: $("min_acceptance").value,
+    min_quartile: $("min_quartile").value, publishers: $("publishers").value,
+  };
+  try {
+    const {job} = await api("/api/find", {manuscript: manuscript.path, criteria, use_claude: $("use_claude").checked});
+    findJob = job;
+    $("findHint").textContent = "Working... this takes a few minutes.";
+    await poll(job, $("findLog"), (j) => {
+      $("findBtn").disabled = false;
+      $("findHint").textContent = j.status === "done" ? "" : "Something went wrong. See the messages above.";
+      if (j.status === "done") showResults(j.result);
+    });
+  } catch (e) { alert(e.message); $("findBtn").disabled = false; }
+};
+
+function fmt(v, suffix) { return v === null || v === undefined ? null : `${+(+v).toFixed(1)}${suffix || ""}`; }
+
+function showResults(r) {
+  $("resultsCard").classList.remove("hidden");
+  $("resultsInfo").textContent = `Rules: ${r.criteria}. Full report saved to ${r.report}`;
+  const box = $("results");
+  box.innerHTML = r.ranked.length ? "" : `<p class="bad">${esc(r.notes.join(" ") || "No journal met every rule.")}</p>`;
+  r.ranked.forEach((c, i) => {
+    const m = c.metrics;
+    const chip = (label, v) => `<span class="chip ${v === null ? "na" : ""}">${label}: ${v === null ? "not published" : esc(v)}</span>`;
+    const el = document.createElement("div");
+    el.className = "journal";
+    el.innerHTML = `
+      <div class="top">
+        <div><h3>${i + 1}. ${esc(c.name)}</h3><div class="muted">${esc(c.publisher)} · ISSN ${esc(c.issn)}${c.open_access ? " · open access" : ""}</div></div>
+        <div class="score" title="Overall match score out of 100">${c.score}</div>
+      </div>
+      <div class="chips">
+        ${chip("First decision", fmt(m.days_to_first_decision, " days"))}
+        ${chip("Acceptance", fmt(m.acceptance_rate, "%"))}
+        ${chip("Quality", m.quartile)}
+        ${m.impact_factor !== null ? chip("Impact factor", fmt(m.impact_factor)) : ""}
+        ${m.sjr !== null ? chip("SJR", fmt(m.sjr)) : ""}
+      </div>
+      <div>${esc(c.scope_reason || `Publishes ${c.matched} papers similar to yours` + (c.refs ? `, and ${c.refs} of your references` : "") + ".")}</div>
+      ${c.warnings.length ? `<div class="warn">⚠ ${esc(c.warnings.join("; "))}</div>` : ""}
+      <details><summary>Similar papers it published</summary><ul class="muted">${c.examples.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>
+      <div class="row"><button class="primary">Prepare submission for this journal</button>
+        ${c.homepage ? `<a href="${esc(c.homepage)}" target="_blank" rel="noopener">Journal website</a>` : ""}</div>`;
+    el.querySelector("button").onclick = () => prepare(i, c.name);
+    box.appendChild(el);
+  });
+  $("excluded").innerHTML = r.excluded.map(x => `<li>${esc(x.name)} (${esc(x.publisher)}): ${esc(x.reason)}</li>`).join("");
+  $("excludedBox").classList.toggle("hidden", !r.excluded.length);
+}
+
+async function prepare(index, name) {
+  $("pkgCard").classList.remove("hidden");
+  $("pkgBody").classList.add("hidden");
+  $("submitCard").classList.add("hidden");
+  $("pkgJournal").textContent = name;
+  $("pkgCard").scrollIntoView({behavior: "smooth"});
+  try {
+    const {job} = await api("/api/prepare", {find_job: findJob, index});
+    await poll(job, $("pkgLog"), (j) => {
+      if (j.status !== "done") return;
+      pkg = j.result;
+      $("pkgBody").classList.remove("hidden");
+      $("pkgPath").textContent = pkg.package;
+      $("checklist").textContent = pkg.checklist;
+      $("cover").textContent = pkg.cover_letter;
+      $("coverBox").classList.toggle("hidden", !pkg.cover_letter);
+      $("subUrl").value = pkg.submission_url;
+      $("submitCard").classList.remove("hidden");
+    });
+  } catch (e) { alert(e.message); }
+}
+
+async function openFolder() { try { await api("/api/open-folder", {path: pkg.package}); } catch (e) { alert(e.message); } }
+
+let assistTimer = null;
+async function pollAssist() {
+  const a = await api("/api/assist/log");
+  $("assistLog").classList.remove("hidden");
+  $("assistLog").textContent = a.log.join("\n");
+  $("assistLog").scrollTop = $("assistLog").scrollHeight;
+  $("fillBtn").disabled = !a.active;
+  $("closeSiteBtn").disabled = !a.active;
+  if (!a.active && assistTimer) { clearInterval(assistTimer); assistTimer = null; }
+}
+$("openSiteBtn").onclick = async () => {
+  try {
+    await api("/api/assist/start", {package: pkg.package, url: $("subUrl").value.trim()});
+    if (!assistTimer) assistTimer = setInterval(pollAssist, 1000);
+    setTimeout(pollAssist, 1500);
+  } catch (e) { alert(e.message); }
+};
+$("fillBtn").onclick = async () => { try { await api("/api/assist/fill", {}); } catch (e) { alert(e.message); } };
+$("closeSiteBtn").onclick = async () => { await api("/api/assist/stop", {}); };
+
+function openSettings() {
+  const s = state.settings || {};
+  $("s_key").value = "";
+  $("keyState").textContent = state.has_api_key ? "(saved, leave empty to keep it)" : "(not set)";
+  $("s_name").value = s.author_name || "";
+  $("s_aff").value = s.author_affiliation || "";
+  $("s_email").value = s.author_email || "";
+  $("outDir").textContent = state.output_dir;
+  $("updateMsg").textContent = "";
+  $("settings").showModal();
+}
+$("settingsBtn").onclick = openSettings;
+$("saveSettings").onclick = async () => {
+  const email = $("s_email").value;
+  await api("/api/settings", {api_key: $("s_key").value.trim(), author_name: $("s_name").value,
+    author_affiliation: $("s_aff").value, author_email: email, email});
+  $("settings").close();
+  refresh();
+};
+$("updateBtn").onclick = async () => {
+  $("updateMsg").textContent = "Checking...";
+  const r = await api("/api/update", {});
+  $("updateMsg").textContent = r.message;
+};
+
+refresh();
+</script>
+</body>
+</html>

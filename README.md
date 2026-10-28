@@ -43,7 +43,23 @@ Optional: download Elsevier's free **Scopus Source List** (.xlsx) from the [Scop
 
 Optional: put your details in `~/.journalfit/author.json` (`{"name": ..., "email": ..., "affiliation": ...}`) for the cover letter.
 
-## Use
+## Easiest: the point-and-click app
+
+```bash
+journalfit app --shortcut   # once: puts a "JournalFit" icon on your Desktop
+```
+
+Double-click the icon and a page opens in your browser (it runs only on your computer). From there you:
+
+1. drag in your manuscript;
+2. tick your rules;
+3. click **Find journals**;
+4. click **Prepare submission** on the journal you want;
+5. open the submission website and click **Fill this page** on each form.
+
+You enter your Claude API key and details once under **Settings**. Results are saved in `~/Documents/JournalFit`.
+
+## Use from the terminal
 
 ```bash
 # 1. Rank journals
