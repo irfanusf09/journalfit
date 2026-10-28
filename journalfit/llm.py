@@ -648,16 +648,31 @@ class DeepSeek(LLM):
         self.model, self.key, self.name = model, api_key, "DeepSeek"
 
     def structured(self, system, prompt, schema, effort="medium"):
-        body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt + "\n\nReply with JSON only, matching this JSON schema:\n"
-                 + json.dumps(schema)},
-            ],
-            "response_format": {"type": "json_object"},
-            "max_tokens": 32000,  # room for thinking (on by default) plus the answer
-        }
+        required = schema.get("required", [])
+        ask = (prompt + "\n\nReply with one JSON object only, no other text. Use exactly these keys, "
+               "filled with real values (this example only shows the shape):\n"
+               + json.dumps(_example(schema), indent=1))
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": ask}]
+        last_missing: list[str] = []
+        for attempt in range(2):
+            text = self._chat(messages)
+            try:
+                out = _unwrap(_json_from_text(text) if not text.strip().startswith("{") else json.loads(text), required)
+            except (LLMError, json.JSONDecodeError):
+                out = {}
+            last_missing = [k for k in required if k not in out]
+            if not last_missing:
+                return out
+            trace.note(f"    DeepSeek answer missing {', '.join(last_missing)}; asking again")
+            messages += [{"role": "assistant", "content": text},
+                         {"role": "user", "content": "That JSON is missing these keys: " + ", ".join(last_missing)
+                          + ". Reply again with one JSON object containing every key from the example."}]
+        raise LLMError(f"DeepSeek answer was missing {', '.join(last_missing)}")
+
+    def _chat(self, messages: list[dict]) -> str:
+        body = {"model": self.model, "messages": messages,
+                "response_format": {"type": "json_object"},
+                "max_tokens": 32000}  # room for thinking (on by default) plus the answer
         try:
             r = requests.post(self.URL, json=body, timeout=600, headers={"Authorization": f"Bearer {self.key}"})
         except requests.RequestException as e:
@@ -667,15 +682,33 @@ class DeepSeek(LLM):
         data = r.json()
         u = data.get("usage") or {}
         self.cost.add(self.model, self.provider, u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
-        text = data["choices"][0]["message"].get("content") or ""
-        try:
-            out = json.loads(text)
-        except json.JSONDecodeError:
-            out = _json_from_text(text)
-        missing = [k for k in schema.get("required", []) if k not in out]
-        if missing:
-            raise LLMError(f"DeepSeek answer was missing {', '.join(missing)}")
+        return data["choices"][0]["message"].get("content") or ""
+
+
+def _example(schema: dict):
+    """A filled-in example of the JSON a schema describes (models copy examples better than schemas)."""
+    t = schema.get("type")
+    if isinstance(t, list):
+        t = next((x for x in t if x != "null"), "string")
+    if t == "object":
+        return {k: _example(v) for k, v in (schema.get("properties") or {}).items()}
+    if t == "array":
+        return [_example(schema.get("items") or {"type": "string"})]
+    return {"string": "...", "number": 0, "integer": 0, "boolean": False}.get(t, "...")
+
+
+def _unwrap(out, required: list[str]) -> dict:
+    """Find the answer when a model nests it, e.g. {"result": {...}} or {"properties": {...}}."""
+    if not isinstance(out, dict):
+        return {}
+    if all(k in out for k in required):
         return out
+    for v in out.values():
+        if isinstance(v, dict):
+            inner = _unwrap(v, required)
+            if all(k in inner for k in required):
+                return inner
+    return out
 
 
 def _find_list(d) -> list[dict]:

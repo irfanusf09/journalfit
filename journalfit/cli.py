@@ -89,7 +89,10 @@ def _load_manuscript(path: str, claude):
     ms = manuscript.parse(path)
     if claude:
         _log("AI is reading the manuscript...")
-        claude.profile_manuscript(ms)
+        try:
+            claude.profile_manuscript(ms)
+        except Exception as e:  # the parsed title/abstract/keywords are enough to continue
+            _log(f"AI couldn't read the manuscript ({e}); continuing with what was read from the file.")
     if not (ms.title or ms.abstract):
         raise SystemExit("Could not find a title or abstract in the manuscript.")
     console.print(f"[bold]Manuscript:[/bold] {ms.title}\n  {ms.word_count} words · {len(ms.keywords)} keywords · "

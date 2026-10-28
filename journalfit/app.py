@@ -120,7 +120,10 @@ def run_find(job: Job, body: dict) -> dict:
     ms = manuscript.parse(path)
     if claude:
         job.say("AI is reading the manuscript...")
-        claude.profile_manuscript(ms)
+        try:
+            claude.profile_manuscript(ms)
+        except Exception as e:  # the parsed title/abstract/keywords are enough to continue
+            job.say(f"AI couldn't read the manuscript ({e}); continuing with what was read from the file.")
     if not (ms.title or ms.abstract):
         raise RuntimeError("Could not find a title or abstract in this file.")
     job.say(f"Title: {ms.title}")

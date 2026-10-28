@@ -193,11 +193,45 @@ def test_deepseek_guidelines_found_by_search(monkeypatch):
     assert "max 8000 words" in prompt
 
 
-def test_deepseek_rejects_incomplete_json(monkeypatch):
-    post = FakePost([{"choices": [{"message": {"content": '{"nope": 1}'}}], "usage": {}}])
+def _ds(content):
+    return {"choices": [{"message": {"content": content}}], "usage": {}}
+
+
+def test_deepseek_rejects_incomplete_json_after_one_retry(monkeypatch):
+    post = FakePost([_ds('{"nope": 1}'), _ds('{"still": "no"}')])
     monkeypatch.setattr(llm_mod.requests, "post", post)
     with pytest.raises(LLMError, match="missing letter"):
         DeepSeek("deepseek-flash", "k").structured("s", "p", SCHEMA)
+    assert len(post.calls) == 2
+    assert "missing these keys: letter" in post.calls[1]["json"]["messages"][-1]["content"]
+
+
+def test_deepseek_echoing_the_schema_shape_is_unwrapped(monkeypatch):
+    # The real failure: the model wrapped its answer like the schema it was shown.
+    echoed = json.dumps({"type": "object", "properties": {
+        "title": "T", "abstract": "A" * 300, "keywords": ["k"], "field_of_study": "Tourism economics",
+        "article_type": "original research", "search_queries": ["tourism carbon emissions"]}})
+    post = FakePost([_ds(echoed)])
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    ms = Manuscript(path="x", title="Connectivity, tourism and carbon")
+    DeepSeek("deepseek-flash", "k").profile_manuscript(ms)
+    assert ms.field_of_study == "Tourism economics" and ms.search_queries == ["tourism carbon emissions"]
+    sent = post.calls[0]["json"]["messages"][1]["content"]
+    assert '"search_queries": [' in sent and '"$schema"' not in sent and '"properties"' not in sent
+
+
+def test_deepseek_retry_succeeds(monkeypatch):
+    post = FakePost([_ds("Sorry, here it is soon."), _ds('{"letter": "Dear Editor"}')])
+    monkeypatch.setattr(llm_mod.requests, "post", post)
+    assert DeepSeek("deepseek-flash", "k").structured("s", "p", SCHEMA) == {"letter": "Dear Editor"}
+
+
+def test_example_shapes():
+    from journalfit.llm import PROFILE_SCHEMA, _example, _metrics_schema
+
+    ex = _example(PROFILE_SCHEMA)
+    assert set(ex) == set(PROFILE_SCHEMA["required"]) and ex["keywords"] == ["..."]
+    assert _example(_metrics_schema())["acceptance_rate"] == 0
 
 
 def test_api_error_is_readable(monkeypatch):
