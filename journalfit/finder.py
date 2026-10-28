@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+import json
+import time
+from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 from . import config
 from .config import Criteria
 from .http import FetchError, HttpClient
 from .metrics.publishers import PageFetcher, load_overrides, scrape_metrics
-from .models import Candidate, Journal, Manuscript
+from .models import Candidate, Journal, Manuscript, Metrics
 from .similarity import tfidf_similarities, top_terms
 from .sources.indexing import IndexingData, norm_issn
 from .sources.openalex import OpenAlex, Work
@@ -29,11 +31,11 @@ class FindResult:
 
 
 class Finder:
-    def __init__(self, http: HttpClient, claude=None, indexing: IndexingData | None = None,
+    def __init__(self, http: HttpClient, llm=None, indexing: IndexingData | None = None,
                  use_browser: bool = True, log: Callable[[str], None] = print):
         self.http = http
         self.oa = OpenAlex(http)
-        self.claude = claude
+        self.llm = llm
         self.indexing = indexing or IndexingData.load()
         self.fetcher = PageFetcher(http, use_browser=use_browser)
         self.log = log
@@ -147,26 +149,39 @@ class Finder:
         return ""
 
     # ---------------------------------------------------------------- stage 3
-    def collect_metrics(self, cands: list[Candidate], criteria: Criteria, web_lookup: bool) -> None:
+    def collect_metrics(self, cands: list[Candidate], criteria: Criteria, web_lookup: bool,
+                        lookup_top: int = 8) -> None:
+        """Overrides, then publisher pages, then (for the best `lookup_top` only) an AI lookup.
+
+        AI lookups are remembered for 90 days, so journals seen before cost nothing.
+        """
         overrides = load_overrides()
+        cache = MetricCache()
         for i, c in enumerate(cands, 1):
             j = c.journal
             self.log(f"  [{i}/{len(cands)}] metrics: {j.name}")
             for issn in j.issns:
                 if norm_issn(issn) in overrides:
                     j.metrics.merge(overrides[norm_issn(issn)])
-            j.metrics.merge(scrape_metrics(j, self.fetcher))
-            needs = (criteria.max_first_decision_days is not None and j.metrics.days_to_first_decision is None) or \
-                    (criteria.min_acceptance_rate is not None and j.metrics.acceptance_rate is None)
-            if web_lookup and self.claude and (needs or j.metrics.days_to_first_decision is None):
+            cached = cache.get(j.openalex_id)
+            if cached:
+                j.metrics.merge(cached)
+            scraped, pages = scrape_metrics(j, self.fetcher)
+            j.metrics.merge(scraped)
+            missing = j.metrics.days_to_first_decision is None or \
+                (criteria.min_acceptance_rate is not None and j.metrics.acceptance_rate is None)
+            if web_lookup and self.llm and missing and not cached and i <= lookup_top:
                 try:
-                    j.metrics.merge(self.claude.lookup_metrics(j))
+                    found = self.llm.lookup_metrics(j, pages)
+                    j.metrics.merge(found)
+                    cache.put(j.openalex_id, found)
                 except Exception as e:  # a failed lookup leaves the metric unknown, never guessed
-                    c.warnings.append(f"web metric lookup failed: {e}")
+                    c.warnings.append(f"metric lookup failed: {e}")
+        cache.save()
 
     # ---------------------------------------------------------------- pipeline
     def find(self, ms: Manuscript, criteria: Criteria, top: int = 10, metrics_for: int = 25,
-             web_lookup: bool = True) -> FindResult:
+             web_lookup: bool = True, lookup_top: int = 8) -> FindResult:
         notes: list[str] = []
         if criteria.scopus and not self.indexing.available:
             raise RuntimeError("Scopus data not downloaded yet. Run: journalfit data update")
@@ -198,7 +213,7 @@ class Finder:
         survivors.sort(key=lambda c: -(c.text_fit + 0.1 * min(c.reference_hits, 5)))
         shortlist = survivors[:metrics_for]
         self.log("Collecting editorial metrics...")
-        self.collect_metrics(shortlist, criteria, web_lookup)
+        self.collect_metrics(shortlist, criteria, web_lookup, lookup_top)
         self.fetcher.close()
 
         kept = []
@@ -210,11 +225,11 @@ class Finder:
             else:
                 kept.append(c)
 
-        if self.claude and kept:
+        if self.llm and kept:
             self.log("Reviewing scope fit of the finalists...")
             review = sorted(kept, key=lambda c: -c.text_fit)[:max(top + 5, 15)]
             try:
-                self.claude.review_scope(ms, review)
+                self.llm.review_scope(ms, review)
             except Exception as e:
                 notes.append(f"Scope review unavailable: {e}")
 
@@ -225,6 +240,35 @@ class Finder:
         if not kept:
             notes.append("No journal met every rule. Loosen a threshold or use --if-missing keep.")
         return FindResult(ms, criteria, kept[:top], excluded, notes)
+
+
+class MetricCache:
+    """AI-found metrics per journal, kept for 90 days in ~/.journalfit/metric_cache.json."""
+
+    TTL = 90 * 24 * 3600
+
+    def __init__(self, path=None):
+        self.path = path or (config.DATA_DIR / "metric_cache.json")
+        try:
+            self.data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            self.data = {}
+        self.dirty = False
+
+    def get(self, key: str) -> Metrics | None:
+        row = self.data.get(key)
+        if not row or time.time() - row["ts"] > self.TTL:
+            return None
+        return Metrics(**row["metrics"])
+
+    def put(self, key: str, m: Metrics) -> None:
+        self.data[key] = {"ts": time.time(), "metrics": asdict(m)}
+        self.dirty = True
+
+    def save(self) -> None:
+        if self.dirty:
+            config.ensure_data_dir()
+            self.path.write_text(json.dumps(self.data))
 
 
 def final_score(c: Candidate, max_refs: int) -> float:

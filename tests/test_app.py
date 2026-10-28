@@ -23,10 +23,10 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SCIMAGO_PATH", data / "scimago.csv")
     monkeypatch.setattr(config, "SCOPUS_PATH", data / "scopus.xlsx")
     monkeypatch.setattr(config, "OVERRIDES_PATH", data / "none.csv")
-    monkeypatch.setattr(app, "SETTINGS_PATH", data / "settings.json")
     monkeypatch.setattr(app, "UPLOADS", data / "uploads")
     monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path / "out")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr("journalfit.http.HttpClient", lambda *a, **k: FakeHttp())
     monkeypatch.setattr("journalfit.metrics.publishers.PageFetcher._browser_get", lambda self, url: None)
     (tmp_path / "out").mkdir()
@@ -57,7 +57,7 @@ def test_click_through(server):
         page.wait_for_selector("#setupCard", state="hidden")
         assert "Journal list loaded" in alerts[-1]
         assert page.is_visible("#keyCard")  # no API key yet
-        assert page.is_disabled("#use_claude")
+        assert page.is_disabled("#use_ai")
 
         page.set_input_files("#msInput", str(paper))
         page.wait_for_selector("text=✓ my paper.docx")
@@ -76,12 +76,23 @@ def test_click_through(server):
 
         # Settings: the key is stored but never sent back to the page.
         page.click("#settingsBtn")
-        page.fill("#s_key", "sk-ant-test")
+        page.select_option("#s_provider", "deepseek")
+        assert page.inner_text("#keyLabel") == "DeepSeek API key"
+        page.fill("#s_key", "sk-deepseek-test")
         page.fill("#s_name", "Dr Test")
         page.click("#saveSettings")
         page.wait_for_selector("#keyCard", state="hidden")
+        assert "DeepSeek" in page.inner_text("#aiName")
         state = page.evaluate("fetch('/api/state', {headers: {'X-Token': TOKEN}}).then(r => r.json())")
-        assert state["has_api_key"] and "api_key" not in state["settings"]
+        assert state["has_api_key"] and state["keys_set"] == ["DEEPSEEK_API_KEY"]
+        assert "keys" not in state["settings"] and "sk-deepseek" not in str(state)
+
+        # Switching provider keeps the saved DeepSeek key but needs a key of its own.
+        page.click("#settingsBtn")
+        page.select_option("#s_provider", "openai")
+        assert "not set" in page.inner_text("#keyState")
+        page.click("#saveSettings")
+        page.wait_for_selector("#keyCard", state="visible")
         browser.close()
 
     pkgs = list((tmp / "out").glob("*/carbon"))

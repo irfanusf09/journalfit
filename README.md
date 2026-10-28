@@ -59,6 +59,27 @@ Double-click the icon and a page opens in your browser (it runs only on your com
 
 You enter your Claude API key and details once under **Settings**. Results are saved in `~/Documents/JournalFit`.
 
+## AI providers
+
+Pick one in the app's **Settings** (or with `--provider` on the command line). Each needs its own API key; a chat subscription such as Claude Pro or ChatGPT Plus does not include API access.
+
+| Provider | Web search | Notes |
+|---|---|---|
+| `claude-haiku` (default) | yes | Cheap and fully automatic |
+| `claude-mix` | yes | Claude Opus for scope check and cover letter, Haiku for metric lookups. Best quality |
+| `claude-opus` | yes | Best quality, highest cost |
+| `openai` | yes | Default model `gpt-5-mini`, which you can change in Settings |
+| `gemini` | yes | Default model `gemini-flash-latest` |
+| `deepseek` | no | Cheapest. It reads the publisher pages the tool fetched itself, so more metrics may stay unknown |
+
+Keys can also come from the environment variables `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` and `DEEPSEEK_API_KEY`.
+
+To keep costs down:
+- AI metric lookups run only for the best 8 journals (`--lookup-top`).
+- Lookup results are remembered for 90 days.
+
+Every run ends with its token usage and an estimated cost.
+
 ## Use from the terminal
 
 ```bash

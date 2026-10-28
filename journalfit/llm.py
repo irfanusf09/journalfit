@@ -1,120 +1,178 @@
-"""Claude-powered steps: manuscript profiling, scope review, metric lookup,
-author-guideline checks and cover letters.
+"""AI providers for the judgment steps: manuscript profiling, scope review,
+metric lookup, author-guideline checks and cover letters.
 
-Every call uses structured JSON output (or a JSON block for web-tool calls) so
-results are machine-checked, and opts into server-side refusal fallbacks.
+Every provider implements two primitives:
+  structured(system, prompt, schema) -> dict   JSON that matches `schema`
+  with_web(system, prompt) -> str              answer using the provider's web search
+Providers without web search (DeepSeek) are given page text the tool fetched itself.
+
+Choose one with make_llm(provider, keys). Usage and an estimated cost are tracked
+on `.cost` so the app can show what a run cost.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
-import anthropic
+import requests
 
-from . import config
 from .models import Candidate, Journal, Manuscript, Metrics
 
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
-WEB_TOOLS = [
-    {"type": "web_search_20260209", "name": "web_search", "max_uses": 6},
-    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 6},
-]
+# Approximate USD prices per million tokens (input, output) and per web search.
+# Estimates for display only; check each provider's pricing page.
+PRICES = {
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "gpt-5-mini": (0.25, 2.00),
+    "gemini-flash-latest": (0.75, 3.75),
+    "deepseek-chat": (0.14, 0.28),
+}
+SEARCH_PRICE = {"anthropic": 0.010, "openai": 0.010, "gemini": 0.014, "deepseek": 0.0}
+
+PROVIDERS = {
+    # id: (label, default model, key setting / env var)
+    "claude-haiku": ("Claude Haiku 5.5: cheap, automatic web lookups", "claude-haiku-5-5", "ANTHROPIC_API_KEY"),
+    "claude-mix": ("Claude Opus 5.5 + Haiku: best quality, Haiku for lookups", "claude-opus-5-5", "ANTHROPIC_API_KEY"),
+    "claude-opus": ("Claude Opus 5.5: best quality, highest cost", "claude-opus-5-5", "ANTHROPIC_API_KEY"),
+    "openai": ("OpenAI (ChatGPT API)", "gpt-5-mini", "OPENAI_API_KEY"),
+    "gemini": ("Google Gemini", "gemini-flash-latest", "GEMINI_API_KEY"),
+    "deepseek": ("DeepSeek: cheapest, no web search", "deepseek-chat", "DEEPSEEK_API_KEY"),
+}
 
 
 class LLMError(RuntimeError):
     pass
 
 
-class Claude:
-    def __init__(self, model: str | None = None):
-        self.client = anthropic.Anthropic()
-        self.model = model or config.CLAUDE_MODEL
+@dataclass
+class Cost:
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    searches: int = 0
+    usd: float = 0.0
+    unknown_price: set = field(default_factory=set)
 
-    # -- low-level helpers -------------------------------------------------
+    def add(self, model: str, provider: str, inp: int, out: int, searches: int = 0) -> None:
+        self.calls += 1
+        self.input_tokens += inp
+        self.output_tokens += out
+        self.searches += searches
+        price = PRICES.get(model)
+        if price is None:
+            self.unknown_price.add(model)
+        else:
+            self.usd += inp / 1e6 * price[0] + out / 1e6 * price[1]
+        self.usd += searches * SEARCH_PRICE.get(provider, 0.0)
 
-    def _create(self, **kw):
-        try:
-            return self.client.beta.messages.create(
-                model=self.model, betas=[FALLBACK_BETA], fallbacks="default", **kw
-            )
-        except anthropic.AuthenticationError as e:
-            raise LLMError("Anthropic credentials missing or invalid: set ANTHROPIC_API_KEY") from e
-        except anthropic.RateLimitError as e:
-            raise LLMError("Anthropic rate limit hit; try again shortly") from e
-        except anthropic.APIStatusError as e:
-            raise LLMError(f"Claude API error {e.status_code}: {e.message}") from e
-        except anthropic.APIConnectionError as e:
-            raise LLMError("Could not reach the Claude API") from e
+    def summary(self) -> str:
+        s = (f"AI usage: {self.calls} calls, {self.input_tokens:,} input + {self.output_tokens:,} output tokens"
+             + (f", {self.searches} web searches" if self.searches else "")
+             + f". Estimated cost: ${self.usd:.2f}")
+        if self.unknown_price:
+            s += f" (plus {', '.join(sorted(self.unknown_price))}, price unknown)"
+        return s
 
-    @staticmethod
-    def _text(resp) -> str:
-        if resp.stop_reason == "refusal":
-            raise LLMError("Claude declined this request")
-        return "".join(b.text for b in resp.content if b.type == "text")
 
-    def structured(self, system: str, prompt: str, schema: dict, effort: str = "medium",
-                   max_tokens: int = 16000) -> dict:
-        resp = self._create(
-            max_tokens=max_tokens, system=system,
-            output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        if resp.stop_reason == "max_tokens":
-            raise LLMError("Claude response was cut off (max_tokens)")
-        return json.loads(self._text(resp))
-
-    def with_web(self, system: str, prompt: str, effort: str = "medium", max_continuations: int = 4) -> str:
-        """Run a request with web search/fetch, resuming server-side pauses."""
-        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-        resp = None
-        for _ in range(max_continuations + 1):
-            resp = self._create(max_tokens=16000, system=system, tools=WEB_TOOLS,
-                                output_config={"effort": effort}, messages=messages)
-            if resp.stop_reason != "pause_turn":
-                break
-            messages = [messages[0], {"role": "assistant", "content": resp.content}]
-        return self._text(resp)
-
-    @staticmethod
-    def _json_block(text: str) -> dict:
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.search(r"(\{.*\})", text, re.S)
-        if not m:
-            raise LLMError("Claude did not return a JSON result")
+def _json_from_text(text: str) -> dict:
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.search(r"(\{.*\})", text, re.S)
+    if not m:
+        raise LLMError("The AI did not return a JSON result")
+    try:
         return json.loads(m.group(1))
+    except json.JSONDecodeError as e:
+        raise LLMError(f"The AI returned malformed JSON: {e}") from e
 
-    # -- pipeline steps ----------------------------------------------------
+
+# ====================================================================== shared pipeline
+
+PROFILE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "abstract": {"type": "string"},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "field_of_study": {"type": "string"},
+        "article_type": {"type": "string"},
+        "search_queries": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "abstract", "keywords", "field_of_study", "article_type", "search_queries"],
+    "additionalProperties": False,
+}
+SCOPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "journals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "fit": {"type": "integer"}, "reason": {"type": "string"}},
+                "required": ["id", "fit", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["journals"],
+    "additionalProperties": False,
+}
+LETTER_SCHEMA = {
+    "type": "object",
+    "properties": {"letter": {"type": "string"}},
+    "required": ["letter"],
+    "additionalProperties": False,
+}
+METRIC_FIELDS = ("days_to_first_decision", "days_to_acceptance", "acceptance_rate", "impact_factor", "citescore")
+METRICS_JSON = ('{"days_to_first_decision": number|null, "days_to_acceptance": number|null, '
+                '"acceptance_rate": number|null, "impact_factor": number|null, "citescore": number|null, '
+                '"source_url": "URL the values came from"}')
+GUIDE_JSON = ('{"guidelines_url": str, "submission_system": "ScholarOne|Editorial Manager|'
+              'Elsevier Editorial|Snapp|MDPI SuSy|OJS|other", "submission_url": str|null, '
+              '"word_limit": int|null, "abstract_word_limit": int|null, "keyword_limit": str|null, '
+              '"reference_style": str, "required_items": [str], '
+              '"issues": [{"item": str, "manuscript": str, "requirement": str}], '
+              '"article_type_accepted": bool|null}')
+
+
+class LLM:
+    """Pipeline steps shared by all providers."""
+
+    name = "AI"
+    provider = ""
+    has_web = True
+    lookup: "LLM | None" = None  # optional cheaper model for metric lookups
+
+    @property
+    def cost(self) -> Cost:
+        if "_cost" not in self.__dict__:
+            self.__dict__["_cost"] = Cost()
+        return self.__dict__["_cost"]
+
+    def structured(self, system: str, prompt: str, schema: dict, effort: str = "medium") -> dict:
+        raise NotImplementedError
+
+    def with_web(self, system: str, prompt: str, effort: str = "medium") -> str:
+        raise NotImplementedError
+
+    # -- steps --------------------------------------------------------------
 
     def profile_manuscript(self, ms: Manuscript) -> None:
-        """Fill in title/abstract/keywords if parsing missed them and derive search queries."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "abstract": {"type": "string"},
-                "keywords": {"type": "array", "items": {"type": "string"}},
-                "field_of_study": {"type": "string"},
-                "article_type": {"type": "string"},
-                "search_queries": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["title", "abstract", "keywords", "field_of_study", "article_type", "search_queries"],
-            "additionalProperties": False,
-        }
-        excerpt = ms.body_text[:20000]
         prompt = (
             "Profile this manuscript for journal matching.\n"
             f"Parsed title: {ms.title or '(not found)'}\n"
             f"Parsed abstract: {ms.abstract or '(not found)'}\n"
             f"Parsed keywords: {', '.join(ms.keywords) or '(not found)'}\n\n"
-            f"<manuscript_excerpt>\n{excerpt}\n</manuscript_excerpt>\n\n"
+            f"<manuscript_excerpt>\n{ms.body_text[:20000]}\n</manuscript_excerpt>\n\n"
             "Return the exact title and abstract as written (fix only extraction artifacts), "
             "4-8 keywords, the specific field/sub-field, the article type (e.g. original research, "
             "review, short communication, case report), and 5 literature-search queries of 3-7 words "
             "each that together cover the paper's topic, methods and application area. Queries are "
             "run against a scholarly search engine to find papers similar to this one."
         )
-        data = self.structured("You are an experienced academic editor.", prompt, schema, effort="low")
+        data = self.structured("You are an experienced academic editor.", prompt, PROFILE_SCHEMA, effort="low")
         ms.title = ms.title or data["title"]
         ms.abstract = ms.abstract if len(ms.abstract) > 200 else data["abstract"]
         ms.keywords = ms.keywords or data["keywords"]
@@ -123,27 +181,6 @@ class Claude:
         ms.search_queries = [q for q in data["search_queries"] if q.strip()][:6]
 
     def review_scope(self, ms: Manuscript, candidates: list[Candidate]) -> None:
-        """Judge each shortlisted journal's scope fit with the evidence we have."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "journals": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "fit": {"type": "integer", "description": "0-10"},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["id", "fit", "reason"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["journals"],
-            "additionalProperties": False,
-        }
         blocks = []
         for c in candidates:
             j = c.journal
@@ -161,74 +198,72 @@ class Claude:
             "readership, as an experienced editor would. 10 = core topic of the journal; 5 = "
             "plausible but peripheral; 0 = out of scope (desk rejection likely). Consider whether "
             "the journal publishes this article type and whether the paper's contribution level "
-            "suits it. Give a one-sentence reason grounded in the evidence."
+            "suits it. Give a one-sentence reason grounded in the evidence. Use the journal ids given."
         )
-        data = self.structured("You are a senior journal editor advising an author.", prompt, schema)
+        data = self.structured("You are a senior journal editor advising an author.", prompt, SCOPE_SCHEMA)
         by_id = {c.journal.openalex_id: c for c in candidates}
-        for row in data["journals"]:
-            c = by_id.get(row["id"])
-            if c:
+        for row in data.get("journals", []):
+            c = by_id.get(str(row.get("id")))
+            if c and isinstance(row.get("fit"), (int, float)):
                 c.scope_fit = max(0, min(10, row["fit"])) / 10
-                c.scope_reason = row["reason"]
+                c.scope_reason = str(row.get("reason", ""))
 
-    def lookup_metrics(self, j: Journal) -> Metrics:
-        """Find editorial metrics on the publisher's official pages via web search."""
-        system = (
-            "You look up journal facts on official sources only: the publisher's journal pages "
-            "or the journal's own website. Never estimate, and never use third-party aggregators. "
-            "If a value is not published on an official page, return null for it."
-        )
-        prompt = (
-            f"Journal: {j.name}\nPublisher: {j.publisher}\nISSN: {', '.join(j.issns)}\n"
-            f"Homepage: {j.homepage or 'unknown'}\n\n"
-            "Find, for the most recent period shown: median days from submission to first decision; "
-            "median days from submission to acceptance; acceptance rate (%); Journal Impact Factor; "
-            "CiteScore. Convert weeks to days (x7). End your reply with a fenced json block:\n"
-            '```json\n{"days_to_first_decision": number|null, "days_to_acceptance": number|null, '
-            '"acceptance_rate": number|null, "impact_factor": number|null, "citescore": number|null, '
-            '"source_url": "official URL the values came from"}\n```'
-        )
-        data = self._json_block(self.with_web(system, prompt, effort="low"))
+    def lookup_metrics(self, j: Journal, pages: dict[str, str] | None = None) -> Metrics:
+        """Editorial metrics from official pages: web search, or the given page texts."""
+        if self.lookup is not None and self.lookup is not self:
+            return self.lookup.lookup_metrics(j, pages)
+        head = (f"Journal: {j.name}\nPublisher: {j.publisher}\nISSN: {', '.join(j.issns)}\n"
+                f"Homepage: {j.homepage or 'unknown'}\n\n")
+        ask = ("Find, for the most recent period shown: median days from submission to first decision; "
+               "median days from submission to acceptance; acceptance rate (%); Journal Impact Factor; "
+               "CiteScore. Convert weeks to days (x7), months to days (x30). End your reply with a fenced "
+               f"json block:\n```json\n{METRICS_JSON}\n```")
+        system = ("You extract journal facts from official sources only: the publisher's journal pages or "
+                  "the journal's own website. Never estimate or use third-party aggregators. If a value is "
+                  "not published on an official page, return null for it.")
+        if self.has_web:
+            text = self.with_web(system, head + ask, effort="low")
+        else:
+            if not pages:
+                return Metrics()
+            docs = "\n\n".join(f"<page url=\"{u}\">\n{t[:15000]}\n</page>" for u, t in pages.items())
+            text = json.dumps(self.structured(system, head + docs + "\n\nFrom these pages only. " + ask,
+                                              _metrics_schema(), effort="low"))
+        data = _json_from_text(text)
         m = Metrics()
-        url = data.get("source_url") or "web lookup"
-        for name in ("days_to_first_decision", "days_to_acceptance", "acceptance_rate", "impact_factor", "citescore"):
+        url = data.get("source_url") or "AI lookup"
+        for name in METRIC_FIELDS:
             v = data.get(name)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and v > 0:
                 setattr(m, name, float(v))
-                m.sources[name] = f"Claude web lookup: {url}"
+                m.sources[name] = f"{self.name} lookup: {url}"
         return m
 
-    def guidelines(self, ms: Manuscript, j: Journal) -> dict:
-        """Read the journal's author guidelines and check the manuscript against them."""
-        system = "You are a meticulous editorial assistant preparing a journal submission."
-        prompt = (
-            f"Journal: {j.name} ({j.publisher}), ISSN {', '.join(j.issns)}, homepage {j.homepage or 'unknown'}.\n"
-            "Find the journal's official author guidelines / guide for authors and read them.\n\n"
+    def guidelines(self, ms: Manuscript, j: Journal, page_text: str = "") -> dict:
+        facts = (
             f"Manuscript facts: article type {ms.article_type or 'unknown'}; {ms.word_count} words "
             f"(main text incl. abstract, excl. references); abstract {len(ms.abstract.split())} words; "
             f"{len(ms.keywords)} keywords; {ms.figure_count} figures; {ms.table_count} tables; "
-            f"{len(ms.references)} references. Reference sample:\n"
-            + "\n".join(ms.references[:3]) + "\n\n"
-            "End your reply with a fenced json block:\n"
-            '```json\n{"guidelines_url": str, "submission_system": "ScholarOne|Editorial Manager|'
-            'Elsevier Editorial|Snapp|MDPI SuSy|OJS|other", "submission_url": str|null, '
-            '"word_limit": int|null, "abstract_word_limit": int|null, "keyword_limit": str|null, '
-            '"reference_style": str, "required_items": [str], '
-            '"issues": [{"item": str, "manuscript": str, "requirement": str}], '
-            '"article_type_accepted": bool|null}\n```\n'
-            "required_items = files/statements needed at submission (e.g. highlights, graphical "
-            "abstract, data availability, CRediT, conflict of interest, ethics, suggested reviewers, "
-            "title page). issues = concrete mismatches between the manuscript facts and the rules."
+            f"{len(ms.references)} references. Reference sample:\n" + "\n".join(ms.references[:3]) + "\n\n"
         )
-        return self._json_block(self.with_web(system, prompt, effort="medium"))
+        tail = (f"End your reply with a fenced json block:\n```json\n{GUIDE_JSON}\n```\n"
+                "required_items = files/statements needed at submission (e.g. highlights, graphical "
+                "abstract, data availability, CRediT, conflict of interest, ethics, suggested reviewers, "
+                "title page). issues = concrete mismatches between the manuscript facts and the rules.")
+        system = "You are a meticulous editorial assistant preparing a journal submission."
+        intro = f"Journal: {j.name} ({j.publisher}), ISSN {', '.join(j.issns)}, homepage {j.homepage or 'unknown'}.\n"
+        if self.has_web:
+            return _json_from_text(self.with_web(
+                system, intro + "Find the journal's official author guidelines / guide for authors and read them.\n\n"
+                + facts + tail))
+        if not page_text:
+            raise LLMError("could not find the author guidelines page (this provider cannot search the web)")
+        return _json_from_text(json.dumps(self.structured(
+            system, intro + f"<author_guidelines>\n{page_text[:40000]}\n</author_guidelines>\n\n" + facts
+            + "Using only these guidelines. " + tail.replace("End your reply with a fenced json block:", "Return JSON:"),
+            _guide_schema())))
 
     def cover_letter(self, ms: Manuscript, j: Journal, author: dict, scope_reason: str = "") -> str:
-        schema = {
-            "type": "object",
-            "properties": {"letter": {"type": "string"}},
-            "required": ["letter"],
-            "additionalProperties": False,
-        }
         prompt = (
             f"Write a submission cover letter to the editor of {j.name}.\n"
             f"Corresponding author: {json.dumps(author)}\n"
@@ -242,4 +277,274 @@ class Claude:
             "names or affiliations that are not given above; use [placeholders] where needed."
         )
         return self.structured("You write concise, professional academic correspondence.",
-                               prompt, schema, effort="medium")["letter"]
+                               prompt, LETTER_SCHEMA)["letter"]
+
+
+def _nullable(t: str) -> dict:
+    return {"type": [t, "null"]}
+
+
+def _metrics_schema() -> dict:
+    props = {n: _nullable("number") for n in METRIC_FIELDS}
+    props["source_url"] = {"type": "string"}
+    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+def _guide_schema() -> dict:
+    props = {
+        "guidelines_url": {"type": "string"}, "submission_system": {"type": "string"},
+        "submission_url": _nullable("string"), "word_limit": _nullable("integer"),
+        "abstract_word_limit": _nullable("integer"), "keyword_limit": _nullable("string"),
+        "reference_style": {"type": "string"},
+        "required_items": {"type": "array", "items": {"type": "string"}},
+        "issues": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"item": {"type": "string"}, "manuscript": {"type": "string"}, "requirement": {"type": "string"}},
+            "required": ["item", "manuscript", "requirement"], "additionalProperties": False}},
+        "article_type_accepted": _nullable("boolean"),
+    }
+    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+# ====================================================================== Claude
+
+class Claude(LLM):
+    provider = "anthropic"
+    FALLBACK_BETA = "server-side-fallback-2026-07-01"
+    WEB_TOOLS = [
+        {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
+        {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
+    ]
+    # Haiku takes the basic tool versions (the dynamic-filtering ones need Opus/Sonnet).
+    WEB_TOOLS_BASIC = [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5},
+    ]
+
+    def __init__(self, model: str = "claude-opus-5-5", api_key: str | None = None):
+        import anthropic
+
+        self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        self.model = model
+        self.name = "Claude"
+
+    def _create(self, **kw):
+        import anthropic
+
+        extra = {}
+        if self.model != "claude-haiku-5-5":  # server-side fallbacks apply to Opus/Sonnet
+            extra = {"betas": [self.FALLBACK_BETA], "fallbacks": "default"}
+        try:
+            resp = self.client.beta.messages.create(model=self.model, **extra, **kw)
+        except anthropic.AuthenticationError as e:
+            raise LLMError("Claude API key missing or invalid (Settings)") from e
+        except anthropic.RateLimitError as e:
+            raise LLMError("Claude rate limit hit; try again shortly") from e
+        except anthropic.APIStatusError as e:
+            raise LLMError(f"Claude API error {e.status_code}: {e.message}") from e
+        except anthropic.APIConnectionError as e:
+            raise LLMError("Could not reach the Claude API") from e
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            stu = getattr(u, "server_tool_use", None)
+            self.cost.add(self.model, self.provider,
+                          (getattr(u, "input_tokens", 0) or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0),
+                          getattr(u, "output_tokens", 0) or 0,
+                          getattr(stu, "web_search_requests", 0) or 0 if stu else 0)
+        return resp
+
+    @staticmethod
+    def _text(resp) -> str:
+        if resp.stop_reason == "refusal":
+            raise LLMError("Claude declined this request")
+        return "".join(b.text for b in resp.content if b.type == "text")
+
+    def structured(self, system, prompt, schema, effort="medium"):
+        resp = self._create(
+            max_tokens=16000, system=system,
+            output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if resp.stop_reason == "max_tokens":
+            raise LLMError("Claude response was cut off (max_tokens)")
+        return json.loads(self._text(resp))
+
+    def with_web(self, system, prompt, effort="medium", max_continuations=4):
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        resp = None
+        for _ in range(max_continuations + 1):
+            tools = self.WEB_TOOLS_BASIC if "haiku" in self.model else self.WEB_TOOLS
+            resp = self._create(max_tokens=16000, system=system, tools=tools,
+                                output_config={"effort": effort}, messages=messages)
+            if resp.stop_reason != "pause_turn":
+                break
+            messages = [messages[0], {"role": "assistant", "content": resp.content}]
+        return self._text(resp)
+
+
+# ====================================================================== OpenAI (Responses API)
+
+class OpenAI(LLM):
+    provider = "openai"
+    URL = "https://api.openai.com/v1/responses"
+
+    def __init__(self, model: str, api_key: str):
+        self.model, self.key, self.name = model, api_key, "OpenAI"
+
+    def _post(self, body: dict) -> dict:
+        try:
+            r = requests.post(self.URL, json=body, timeout=600,
+                              headers={"Authorization": f"Bearer {self.key}"})
+        except requests.RequestException as e:
+            raise LLMError(f"Could not reach OpenAI: {e}") from e
+        if r.status_code != 200:
+            raise LLMError(f"OpenAI error {r.status_code}: {_err(r)}")
+        data = r.json()
+        u = data.get("usage") or {}
+        searches = sum(1 for o in data.get("output", []) if o.get("type") == "web_search_call")
+        self.cost.add(self.model, self.provider, u.get("input_tokens", 0), u.get("output_tokens", 0), searches)
+        return data
+
+    @staticmethod
+    def _text(data: dict) -> str:
+        out = []
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for c in item.get("content", []):
+                    if c.get("type") == "output_text":
+                        out.append(c.get("text", ""))
+                    elif c.get("type") == "refusal":
+                        raise LLMError("OpenAI declined this request")
+        return "".join(out)
+
+    def structured(self, system, prompt, schema, effort="medium"):
+        data = self._post({
+            "model": self.model, "instructions": system, "input": prompt,
+            "text": {"format": {"type": "json_schema", "name": "result", "schema": schema, "strict": True}},
+        })
+        return json.loads(self._text(data))
+
+    def with_web(self, system, prompt, effort="medium"):
+        return self._text(self._post({"model": self.model, "instructions": system, "input": prompt,
+                                      "tools": [{"type": "web_search"}]}))
+
+
+# ====================================================================== Gemini
+
+class Gemini(LLM):
+    provider = "gemini"
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(self, model: str, api_key: str):
+        self.model, self.key, self.name = model, api_key, "Gemini"
+
+    def _post(self, body: dict) -> dict:
+        try:
+            r = requests.post(self.URL.format(model=self.model), json=body, timeout=600,
+                              headers={"x-goog-api-key": self.key})
+        except requests.RequestException as e:
+            raise LLMError(f"Could not reach Gemini: {e}") from e
+        if r.status_code != 200:
+            raise LLMError(f"Gemini error {r.status_code}: {_err(r)}")
+        data = r.json()
+        u = data.get("usageMetadata") or {}
+        cand = (data.get("candidates") or [{}])[0]
+        searches = len(((cand.get("groundingMetadata") or {}).get("webSearchQueries")) or [])
+        self.cost.add(self.model, self.provider, u.get("promptTokenCount", 0),
+                      (u.get("candidatesTokenCount", 0) or 0) + (u.get("thoughtsTokenCount", 0) or 0), searches)
+        return data
+
+    @staticmethod
+    def _text(data: dict) -> str:
+        cands = data.get("candidates") or []
+        if not cands:
+            raise LLMError("Gemini returned no answer (possibly blocked)")
+        parts = (cands[0].get("content") or {}).get("parts") or []
+        return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+
+    @staticmethod
+    def _body(system: str, prompt: str) -> dict:
+        return {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+
+    def structured(self, system, prompt, schema, effort="medium"):
+        body = self._body(system, prompt)
+        body["generationConfig"] = {"responseMimeType": "application/json", "responseJsonSchema": schema}
+        return json.loads(self._text(self._post(body)))
+
+    def with_web(self, system, prompt, effort="medium"):
+        body = self._body(system, prompt)
+        body["tools"] = [{"google_search": {}}]
+        return self._text(self._post(body))
+
+
+# ====================================================================== DeepSeek (OpenAI-compatible chat)
+
+class DeepSeek(LLM):
+    provider = "deepseek"
+    has_web = False
+    URL = "https://api.deepseek.com/chat/completions"
+
+    def __init__(self, model: str, api_key: str):
+        self.model, self.key, self.name = model, api_key, "DeepSeek"
+
+    def structured(self, system, prompt, schema, effort="medium"):
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt + "\n\nReply with JSON only, matching this JSON schema:\n"
+                 + json.dumps(schema)},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": 8000,
+        }
+        try:
+            r = requests.post(self.URL, json=body, timeout=600, headers={"Authorization": f"Bearer {self.key}"})
+        except requests.RequestException as e:
+            raise LLMError(f"Could not reach DeepSeek: {e}") from e
+        if r.status_code != 200:
+            raise LLMError(f"DeepSeek error {r.status_code}: {_err(r)}")
+        data = r.json()
+        u = data.get("usage") or {}
+        self.cost.add(self.model, self.provider, u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
+        text = data["choices"][0]["message"].get("content") or ""
+        try:
+            out = json.loads(text)
+        except json.JSONDecodeError:
+            out = _json_from_text(text)
+        missing = [k for k in schema.get("required", []) if k not in out]
+        if missing:
+            raise LLMError(f"DeepSeek answer was missing {', '.join(missing)}")
+        return out
+
+
+def _err(r: requests.Response) -> str:
+    try:
+        d = r.json()
+        e = d.get("error", d)
+        return e.get("message", str(e)) if isinstance(e, dict) else str(e)
+    except ValueError:
+        return r.text[:300]
+
+
+# ====================================================================== factory
+
+def make_llm(provider: str, keys: dict[str, str], model: str | None = None) -> LLM:
+    """keys: {"ANTHROPIC_API_KEY": ..., "OPENAI_API_KEY": ..., ...}"""
+    if provider not in PROVIDERS:
+        raise LLMError(f"Unknown AI provider '{provider}'. Choose one of: {', '.join(PROVIDERS)}")
+    label, default_model, key_name = PROVIDERS[provider]
+    key = keys.get(key_name, "")
+    if not key:
+        raise LLMError(f"No API key for {label.split(':')[0]} (set {key_name} or add it in Settings)")
+    model = model or default_model
+    if provider == "claude-mix":
+        main = Claude(model, key)
+        main.lookup = Claude("claude-haiku-5-5", key)
+        main.__dict__["_cost"] = main.lookup.cost  # one bill for both models
+        return main
+    if provider.startswith("claude"):
+        return Claude(model, key)
+    cls = {"openai": OpenAI, "gemini": Gemini, "deepseek": DeepSeek}[provider]
+    return cls(model, key)

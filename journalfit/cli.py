@@ -18,6 +18,7 @@ from rich.console import Console
 
 from . import config
 from .config import Criteria
+from .llm import PROVIDERS
 
 console = Console()
 
@@ -49,8 +50,11 @@ def add_filter_args(p: argparse.ArgumentParser) -> None:
     r = p.add_argument_group("run options")
     r.add_argument("--top", type=int, default=10, help="how many journals to list")
     r.add_argument("--metrics-for", type=int, default=25, help="collect metrics for this many candidates")
-    r.add_argument("--no-llm", action="store_true", help="don't use Claude (text matching and scraping only)")
-    r.add_argument("--no-web-lookup", action="store_true", help="don't let Claude search the web for missing metrics")
+    r.add_argument("--no-llm", action="store_true", help="don't use AI (text matching and scraping only)")
+    r.add_argument("--provider", choices=list(PROVIDERS), help="AI provider (default: the one in Settings)")
+    r.add_argument("--model", help="override the provider's model name")
+    r.add_argument("--lookup-top", type=int, default=8, help="AI metric lookups for the best N journals (default 8)")
+    r.add_argument("--no-web-lookup", action="store_true", help="don't let the AI look up missing metrics")
     r.add_argument("--no-browser", action="store_true", help="don't use a headless browser for blocked pages")
     r.add_argument("--out", default="submissions", help="output folder (default ./submissions)")
 
@@ -64,12 +68,19 @@ def criteria_from(a: argparse.Namespace) -> Criteria:
     )
 
 
-def _claude(a):
-    if a.no_llm:
+def _llm(a):
+    if getattr(a, "no_llm", False):
         return None
-    from .llm import Claude
+    from . import settings
 
-    return Claude()
+    llm = settings.make(getattr(a, "provider", None), getattr(a, "model", None))
+    _log(f"AI: {llm.name} ({llm.model})")
+    return llm
+
+
+def _cost(llm) -> None:
+    if llm:
+        console.print(f"[dim]{llm.cost.summary()}[/dim]")
 
 
 def _load_manuscript(path: str, claude):
@@ -77,7 +88,7 @@ def _load_manuscript(path: str, claude):
 
     ms = manuscript.parse(path)
     if claude:
-        _log("Profiling manuscript with Claude...")
+        _log("AI is reading the manuscript...")
         claude.profile_manuscript(ms)
     if not (ms.title or ms.abstract):
         raise SystemExit("Could not find a title or abstract in the manuscript.")
@@ -92,9 +103,9 @@ def _find(a, ms, claude):
     from .http import HttpClient
     from .report import print_result, write_report
 
-    finder = Finder(HttpClient(), claude=claude, use_browser=not a.no_browser, log=_log)
+    finder = Finder(HttpClient(), llm=claude, use_browser=not a.no_browser, log=_log)
     res = finder.find(ms, criteria_from(a), top=a.top, metrics_for=a.metrics_for,
-                      web_lookup=not a.no_web_lookup)
+                      web_lookup=not a.no_web_lookup, lookup_top=a.lookup_top)
     print_result(res, console)
     path = write_report(res, Path(a.out) / _stem(ms.path))
     console.print(f"\nReport: {path}")
@@ -108,8 +119,12 @@ def _stem(p: str) -> str:
 
 
 def _author(a) -> dict:
+    from . import settings
+
     path = config.DATA_DIR / "author.json"
-    author = json.loads(path.read_text()) if path.exists() else {}
+    author = settings.author()
+    if path.exists():
+        author.update(json.loads(path.read_text()))
     for k in ("name", "email", "affiliation"):
         v = getattr(a, f"author_{k}", None)
         if v:
@@ -118,15 +133,16 @@ def _author(a) -> dict:
 
 
 def cmd_find(a):
-    claude = _claude(a)
+    claude = _llm(a)
     _find(a, _load_manuscript(a.manuscript, claude), claude)
+    _cost(claude)
 
 
 def cmd_prepare(a, ms=None, cand=None, claude=None):
     from .prepare import build_package
     from .report import candidate_from_dict
 
-    claude = claude if claude is not None else _claude(a)
+    claude = claude if claude is not None else _llm(a)
     if cand is None:
         short = Path(a.out) / _stem(a.manuscript) / "shortlist.json"
         if not short.exists():
@@ -140,6 +156,7 @@ def cmd_prepare(a, ms=None, cand=None, claude=None):
     out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path))
     console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · metadata.json · manuscript copy")
     console.print((out / "checklist.md").read_text())
+    _cost(claude)
     return out
 
 
@@ -159,7 +176,7 @@ def _pick(ranked, pick: str):
 
 def cmd_submit(a):
     """One command, one journal: find -> confirm -> prepare -> browser assistant."""
-    claude = _claude(a)
+    claude = _llm(a)
     ms = _load_manuscript(a.manuscript, claude)
     res = _find(a, ms, claude)
     if not res.ranked:
@@ -281,6 +298,8 @@ def main(argv=None):
         else:
             s.add_argument("--out", default="submissions")
             s.add_argument("--no-llm", action="store_true")
+            s.add_argument("--provider", choices=list(PROVIDERS))
+            s.add_argument("--model")
         s.set_defaults(fn=fn)
 
     s = sub.add_parser("assist", help="reopen the browser assistant for a prepared package")

@@ -15,7 +15,7 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
-def build_package(ms: Manuscript, cand: Candidate, claude, author: dict, out_root: Path) -> Path:
+def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: Path, http=None) -> Path:
     j = cand.journal
     out = out_root / slug(j.name)
     out.mkdir(parents=True, exist_ok=True)
@@ -23,12 +23,24 @@ def build_package(ms: Manuscript, cand: Candidate, claude, author: dict, out_roo
     shutil.copy2(src, out / f"manuscript{src.suffix}")
 
     guide: dict = {}
-    if claude:
+    if llm:
         try:
-            guide = claude.guidelines(ms, j)
+            page = ""
+            if not llm.has_web:  # e.g. DeepSeek: find and read the guidelines page ourselves
+                from .http import HttpClient
+                from .metrics.publishers import PageFetcher, find_guidelines_text
+
+                fetcher = PageFetcher(http or HttpClient())
+                try:
+                    url, page = find_guidelines_text(j, fetcher)
+                finally:
+                    fetcher.close()
+            guide = llm.guidelines(ms, j, page)
+            if page and not guide.get("guidelines_url"):
+                guide["guidelines_url"] = url
         except Exception as e:
             guide = {"error": str(e)}
-        letter = claude.cover_letter(ms, j, author, cand.scope_reason)
+        letter = llm.cover_letter(ms, j, author, cand.scope_reason)
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 

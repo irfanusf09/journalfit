@@ -207,7 +207,7 @@ def test_finder_end_to_end(tmp_path, monkeypatch):
     ms = manuscript.parse(p)
     idx = IndexingData()
     idx.scimago = parse_scimago(SCIMAGO + '4;4;Slow Journal;journal;"12345679";1;Q1;50;Springer;X\n')
-    finder = Finder(FakeHttp(), claude=None, indexing=idx, use_browser=False, log=lambda *_: None)
+    finder = Finder(FakeHttp(), llm=None, indexing=idx, use_browser=False, log=lambda *_: None)
     crit = Criteria(no_oa=True, scopus=True, max_first_decision_days=90, min_quartile="Q2")
     res = finder.find(ms, crit, top=5)
 
@@ -262,3 +262,29 @@ def test_scimago_2025_layout_oa_and_coverage():
     idx.annotate(old)
     f = Finder.__new__(Finder)
     assert f.apply_static_filters(Candidate(journal=old), Criteria(scopus=True), set()) == "discontinued in Scopus"
+
+
+def test_ai_lookup_limited_and_cached(tmp_path, monkeypatch):
+    from journalfit.finder import MetricCache
+
+    monkeypatch.setattr("journalfit.config.OVERRIDES_PATH", tmp_path / "none.csv")
+    monkeypatch.setattr("journalfit.config.DATA_DIR", tmp_path)
+
+    class FakeLLM:
+        calls = []
+
+        def lookup_metrics(self, j, pages=None):
+            self.calls.append(j.name)
+            return Metrics(days_to_first_decision=40.0, sources={"days_to_first_decision": "ai"})
+
+    llm = FakeLLM()
+    f = Finder(FakeHttp(), llm=llm, indexing=IndexingData(), use_browser=False, log=lambda *_: None)
+    cands = [Candidate(journal=Journal(f"X{i}", f"J{i}")) for i in range(5)]
+    f.collect_metrics(cands, Criteria(), web_lookup=True, lookup_top=2)
+    assert llm.calls == ["J0", "J1"]  # only the best two
+    assert cands[0].journal.metrics.days_to_first_decision == 40 and cands[4].journal.metrics.days_to_first_decision is None
+    assert MetricCache().get("X0").days_to_first_decision == 40
+
+    again = [Candidate(journal=Journal("X0", "J0"))]
+    f.collect_metrics(again, Criteria(), web_lookup=True, lookup_top=2)
+    assert llm.calls == ["J0", "J1"] and again[0].journal.metrics.days_to_first_decision == 40  # from cache

@@ -98,11 +98,11 @@
   </section>
 
   <section class="card banner hidden" id="keyCard">
-    <h2>Optional: add your Claude API key</h2>
+    <h2>Optional: connect an AI</h2>
     <p class="muted">Without it the tool still finds and ranks journals. With it, it also checks scope like an editor,
       looks up missing metrics, reads author guidelines and writes your cover letter.
-      Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
-    <button onclick="openSettings()">Add key in Settings</button>
+      Choose Claude, ChatGPT (OpenAI), Gemini or DeepSeek and paste its API key in Settings.</p>
+    <button onclick="openSettings()">Choose AI in Settings</button>
   </section>
 
   <!-- Step 1 -->
@@ -124,8 +124,8 @@
       <label class="check"><input type="checkbox" id="skip_missing">
         <span>Skip journals that don't publish their numbers<br>
           <span class="muted">otherwise they're kept and marked</span></span></label>
-      <label class="check"><input type="checkbox" id="use_claude" checked>
-        <span>Use Claude<br><span class="muted">scope check, missing metrics, cover letter</span></span></label>
+      <label class="check"><input type="checkbox" id="use_ai" checked>
+        <span>Use AI <span id="aiName"></span><br><span class="muted">scope check, missing metrics, cover letter</span></span></label>
     </div>
     <div class="grid" style="margin-top:16px">
       <div class="field"><label for="max_first_decision">First decision within (days)</label>
@@ -191,8 +191,13 @@
 
 <dialog id="settings">
   <h2 style="margin-top:0">Settings</h2>
-  <div class="field"><label for="s_key">Claude API key <span id="keyState" class="muted"></span></label>
-    <input type="password" id="s_key" placeholder="sk-ant-..." autocomplete="off"></div>
+  <div class="field"><label for="s_provider">AI provider</label>
+    <select id="s_provider"></select></div>
+  <div class="field"><label for="s_key"><span id="keyLabel">API key</span> <span id="keyState" class="muted"></span></label>
+    <input type="password" id="s_key" autocomplete="off">
+    <span class="muted" id="keyHelp"></span></div>
+  <details><summary>Advanced: model name</summary>
+    <div class="field" style="margin-top:8px"><input type="text" id="s_model" placeholder=""></div></details>
   <div class="field"><label for="s_name">Your name (for the cover letter)</label><input type="text" id="s_name"></div>
   <div class="field"><label for="s_aff">Your affiliation</label><input type="text" id="s_aff"></div>
   <div class="field"><label for="s_email">Your email</label><input type="text" id="s_email"></div>
@@ -229,8 +234,10 @@ async function refresh() {
   state = await api("/api/state");
   $("setupCard").classList.toggle("hidden", state.data.scimago > 0);
   $("keyCard").classList.toggle("hidden", state.has_api_key);
-  $("use_claude").checked = state.has_api_key;
-  $("use_claude").disabled = !state.has_api_key;
+  $("use_ai").checked = state.has_api_key;
+  $("use_ai").disabled = !state.has_api_key;
+  const p = state.providers.find(x => x.id === state.settings.provider);
+  $("aiName").textContent = p && state.has_api_key ? "(" + p.label.split(":")[0] + ")" : "";
   updateFindButton();
 }
 
@@ -290,7 +297,7 @@ $("findBtn").onclick = async () => {
     min_quartile: $("min_quartile").value, publishers: $("publishers").value,
   };
   try {
-    const {job} = await api("/api/find", {manuscript: manuscript.path, criteria, use_claude: $("use_claude").checked});
+    const {job} = await api("/api/find", {manuscript: manuscript.path, criteria, use_ai: $("use_ai").checked});
     findJob = job;
     $("findHint").textContent = "Working... this takes a few minutes.";
     await poll(job, $("findLog"), (j) => {
@@ -381,10 +388,30 @@ $("openSiteBtn").onclick = async () => {
 $("fillBtn").onclick = async () => { try { await api("/api/assist/fill", {}); } catch (e) { alert(e.message); } };
 $("closeSiteBtn").onclick = async () => { await api("/api/assist/stop", {}); };
 
+const KEY_HELP = {
+  ANTHROPIC_API_KEY: ["Claude API key", "sk-ant-...", "https://console.anthropic.com"],
+  OPENAI_API_KEY: ["OpenAI API key", "sk-...", "https://platform.openai.com/api-keys"],
+  GEMINI_API_KEY: ["Gemini API key", "AIza...", "https://aistudio.google.com/apikey"],
+  DEEPSEEK_API_KEY: ["DeepSeek API key", "sk-...", "https://platform.deepseek.com/api_keys"],
+};
+function showProvider() {
+  const p = state.providers.find(x => x.id === $("s_provider").value);
+  const [label, ph, url] = KEY_HELP[p.key];
+  $("keyLabel").textContent = label;
+  $("s_key").placeholder = ph;
+  $("s_key").value = "";
+  const saved = state.keys_set.includes(p.key);
+  $("keyState").textContent = saved ? "(saved, leave empty to keep it)" : "(not set)";
+  $("keyHelp").innerHTML = `Get one at <a href="${url}" target="_blank" rel="noopener">${url.replace("https://", "")}</a>. A chat subscription (Claude Pro, ChatGPT Plus) does not include API access.`;
+  $("s_model").placeholder = "default: " + p.model;
+  $("s_model").value = ((state.settings.models || {})[p.id]) || "";
+}
 function openSettings() {
   const s = state.settings || {};
-  $("s_key").value = "";
-  $("keyState").textContent = state.has_api_key ? "(saved, leave empty to keep it)" : "(not set)";
+  $("s_provider").innerHTML = state.providers.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("");
+  $("s_provider").value = s.provider || "claude-haiku";
+  $("s_provider").onchange = showProvider;
+  showProvider();
   $("s_name").value = s.author_name || "";
   $("s_aff").value = s.author_affiliation || "";
   $("s_email").value = s.author_email || "";
@@ -394,9 +421,12 @@ function openSettings() {
 }
 $("settingsBtn").onclick = openSettings;
 $("saveSettings").onclick = async () => {
-  const email = $("s_email").value;
-  await api("/api/settings", {api_key: $("s_key").value.trim(), author_name: $("s_name").value,
-    author_affiliation: $("s_aff").value, author_email: email, email});
+  const p = state.providers.find(x => x.id === $("s_provider").value);
+  try {
+    await api("/api/settings", {provider: p.id, keys: {[p.key]: $("s_key").value.trim()},
+      model: $("s_model").value.trim(), author_name: $("s_name").value,
+      author_affiliation: $("s_aff").value, author_email: $("s_email").value});
+  } catch (e) { alert(e.message); return; }
   $("settings").close();
   refresh();
 };

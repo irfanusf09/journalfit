@@ -137,16 +137,69 @@ def _looks_blocked(html: str) -> bool:
                                    "are you a robot", "captcha"))
 
 
-def scrape_metrics(j: Journal, fetcher: PageFetcher) -> Metrics:
+def scrape_metrics(j: Journal, fetcher: PageFetcher) -> tuple[Metrics, dict[str, str]]:
+    """Metrics found on the publisher pages, plus the page texts (for AI reading)."""
     found = Metrics()
+    pages: dict[str, str] = {}
     for url in candidate_urls(j):
         html = fetcher.get(url)
         if not html:
             continue
-        found.merge(extract_metrics(page_text(html), url))
+        pages[url] = page_text(html)
+        found.merge(extract_metrics(pages[url], url))
         if found.days_to_first_decision is not None and found.acceptance_rate is not None:
             break
-    return found
+    return found, pages
+
+
+GUIDE_LINK = re.compile(r"guide for authors|author guidelines|instructions for authors|"
+                        r"submission guidelines|information for authors|for authors", re.I)
+
+
+def guideline_urls(j: Journal) -> list[str]:
+    urls = []
+    home = j.homepage.rstrip("/")
+    if "sciencedirect.com/journal/" in home:
+        urls.append(home.split("?")[0] + "/publish/guide-for-authors")
+    m = re.search(r"springer\.com/journal/(\d+)", home)
+    if m:
+        urls.append(f"https://link.springer.com/journal/{m.group(1)}/submission-guidelines")
+    m = re.search(r"tandfonline\.com/(?:toc|loi|journals)/([a-z0-9]+)", home, re.I)
+    if m:
+        urls.append(f"https://www.tandfonline.com/action/authorSubmission?show=instructions&journalCode={m.group(1)}")
+    m = re.search(r"mdpi\.com/journal/([a-z0-9\-]+)", home, re.I)
+    if m:
+        urls.append(f"https://www.mdpi.com/journal/{m.group(1)}/instructions")
+    return urls
+
+
+def find_guidelines_text(j: Journal, fetcher: PageFetcher) -> tuple[str, str]:
+    """(url, text) of the journal's author guidelines, found without a web search."""
+    from urllib.parse import urljoin
+
+    from bs4 import BeautifulSoup
+
+    tried = set()
+    for url in guideline_urls(j):
+        tried.add(url)
+        html = fetcher.get(url)
+        if html:
+            return url, page_text(html)
+    if not j.homepage:
+        return "", ""
+    html = fetcher.get(j.homepage)
+    if not html:
+        return "", ""
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        if GUIDE_LINK.search(a.get_text(" ", strip=True)):
+            url = urljoin(j.homepage, a["href"])
+            if url in tried:
+                continue
+            page = fetcher.get(url)
+            if page:
+                return url, page_text(page)
+    return "", ""
 
 
 def load_overrides(path=None) -> dict[str, Metrics]:

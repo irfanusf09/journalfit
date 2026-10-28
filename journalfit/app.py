@@ -24,11 +24,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import config
+from . import settings as settings_mod
 from .config import Criteria
+from .llm import PROVIDERS
 
 ROOT = Path(__file__).resolve().parent
 REPO_DIR = ROOT.parent
-SETTINGS_PATH = config.DATA_DIR / "settings.json"
 UPLOADS = config.DATA_DIR / "uploads"
 OUTPUT_DIR = Path.home() / "Documents" / "JournalFit"
 TOKEN = secrets.token_urlsafe(24)
@@ -37,28 +38,12 @@ TOKEN = secrets.token_urlsafe(24)
 # ------------------------------------------------------------------ settings
 
 def load_settings() -> dict:
-    try:
-        return json.loads(SETTINGS_PATH.read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(s: dict) -> None:
-    config.ensure_data_dir()
-    SETTINGS_PATH.write_text(json.dumps(s, indent=2))
-    os.chmod(SETTINGS_PATH, 0o600)  # contains the API key
-    apply_settings(s)
+    return settings_mod.load()
 
 
 def apply_settings(s: dict) -> None:
-    if s.get("api_key"):
-        os.environ["ANTHROPIC_API_KEY"] = s["api_key"]
-    if s.get("email"):
-        config.CONTACT_EMAIL = s["email"]
-
-
-def author_from(s: dict) -> dict:
-    return {k: s[f"author_{k}"] for k in ("name", "email", "affiliation") if s.get(f"author_{k}")}
+    if s.get("author_email"):
+        config.CONTACT_EMAIL = s["author_email"]  # OpenAlex "polite pool"
 
 
 # ------------------------------------------------------------------ jobs
@@ -97,15 +82,18 @@ def start_job(fn, *args) -> Job:
     return job
 
 
-def _claude_or_none(use_claude: bool, job: Job):
-    if not use_claude:
+def _llm_or_none(use_ai: bool, job: Job):
+    if not use_ai:
         return None
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        job.say("No Claude API key saved (Settings), continuing without Claude.")
-        return None
-    from .llm import Claude
+    from .llm import LLMError
 
-    return Claude()
+    try:
+        llm = settings_mod.make()
+    except LLMError as e:
+        job.say(f"{e}. Continuing without AI.")
+        return None
+    job.say(f"AI: {llm.name} ({llm.model})")
+    return llm
 
 
 def run_find(job: Job, body: dict) -> dict:
@@ -127,21 +115,23 @@ def run_find(job: Job, body: dict) -> dict:
         max_apc_usd=_num(c.get("max_apc")),
         if_missing="skip" if c.get("skip_missing") else "keep",
     )
-    claude = _claude_or_none(bool(body.get("use_claude")), job)
+    claude = _llm_or_none(bool(body.get("use_ai")), job)
     job.say(f"Reading {path.name}...")
     ms = manuscript.parse(path)
     if claude:
-        job.say("Claude is reading the manuscript...")
+        job.say("AI is reading the manuscript...")
         claude.profile_manuscript(ms)
     if not (ms.title or ms.abstract):
         raise RuntimeError("Could not find a title or abstract in this file.")
     job.say(f"Title: {ms.title}")
-    finder = Finder(HttpClient(), claude=claude, log=job.say)
+    finder = Finder(HttpClient(), llm=claude, log=job.say)
     res = finder.find(ms, criteria, top=int(body.get("top") or 10), web_lookup=claude is not None)
     out = OUTPUT_DIR / (slug(path.stem) or "manuscript")
     report = write_report(res, out)
     job.data.update(result=res, manuscript=ms, claude=claude, out=out)
     job.say(f"Done. Report saved to {report}")
+    if claude:
+        job.say(claude.cost.summary())
     return {
         "title": ms.title, "criteria": criteria.describe(), "notes": res.notes, "report": str(report),
         "ranked": [_cand_json(c) for c in res.ranked],
@@ -170,11 +160,14 @@ def run_prepare(job: Job, find_job: Job, index: int) -> dict:
     claude = find_job.data["claude"]
     job.say(f"Preparing the package for {cand.journal.name}...")
     if claude:
-        job.say("Claude is reading the author guidelines and writing the cover letter (1-3 minutes)...")
-    pkg = build_package(ms, cand, claude, author_from(load_settings()), find_job.data["out"])
+        job.say("AI is reading the author guidelines and writing the cover letter (1-3 minutes)...")
+        before = claude.cost.usd
+    pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"])
     meta = json.loads((pkg / "metadata.json").read_text())
     cover = pkg / "cover_letter.txt"
     job.say("Package ready.")
+    if claude:
+        job.say(f"Estimated AI cost of this step: ${claude.cost.usd - before:.2f}")
     return {
         "journal": cand.journal.name, "package": str(pkg),
         "checklist": (pkg / "checklist.md").read_text(),
@@ -342,10 +335,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "forbidden"}, 403)
         if u.path == "/api/state":
             s = load_settings()
+            keys = settings_mod.keys(s)
+            provider = s.get("provider")
             return self._json({
                 "data": data_status(),
-                "settings": {k: v for k, v in s.items() if k != "api_key"},
-                "has_api_key": bool(s.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")),
+                "settings": {k: v for k, v in s.items() if k != "keys"},
+                "keys_set": sorted(keys),  # which keys exist, never the keys themselves
+                "providers": [{"id": k, "label": v[0], "model": v[1], "key": v[2]} for k, v in PROVIDERS.items()],
+                "has_api_key": PROVIDERS[provider][2] in keys if provider in PROVIDERS else False,
                 "output_dir": str(OUTPUT_DIR),
                 "can_update": (REPO_DIR / ".git").exists(),
             })
@@ -370,11 +367,18 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self._body() or b"{}")
             if u.path == "/api/settings":
                 s = load_settings()
-                for k, v in body.items():
-                    if k == "api_key" and not v:
-                        continue  # empty box = keep the saved key
-                    s[k] = v.strip() if isinstance(v, str) else v
-                save_settings(s)
+                for name, v in (body.pop("keys", None) or {}).items():
+                    if name in settings_mod.KEY_NAMES and v.strip():  # empty box = keep the saved key
+                        s["keys"][name] = v.strip()
+                if body.get("provider") and body["provider"] not in PROVIDERS:
+                    raise ValueError("unknown provider")
+                for k in ("provider", "author_name", "author_affiliation", "author_email"):
+                    if k in body:
+                        s[k] = str(body[k]).strip()
+                if "model" in body:
+                    s.setdefault("models", {})[s["provider"]] = str(body["model"]).strip()
+                settings_mod.save(s)
+                apply_settings(s)
                 return self._json({"ok": True})
             if u.path == "/api/find":
                 return self._json({"job": start_job(run_find, body).id})
