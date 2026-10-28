@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
@@ -50,7 +50,8 @@ COLLECT_JS = r"""
     const r = el.getBoundingClientRect();
     if (type !== 'file' && (r.width === 0 || r.height === 0)) return;
     el.setAttribute('data-jf-idx', String(idx));
-    out.push({idx: idx++, type, tag: el.tagName.toLowerCase(), label: labelFor(el), value: el.value || ''});
+    out.push({idx: idx++, type, tag: el.tagName.toLowerCase(), label: labelFor(el), value: el.value || '',
+              multiple: !!el.multiple});
   });
   return out;
 }
@@ -66,6 +67,8 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
     ("cover_letter_file", re.compile(r"cover[\s_-]*letter", re.I)),
+    ("supplementary_file", re.compile(r"supplement|supporting[\s_-]*(info|material|file)|additional[\s_-]*file|"
+                                      r"appendi(x|ces)|electronic[\s_-]*supplementary|\bESM\b|\bSI\b", re.I)),
     ("manuscript_file", re.compile(r"manuscript|main[\s_-]*(document|file)|article file|upload|file", re.I)),
 ]
 
@@ -74,6 +77,7 @@ FILE_RULES: list[tuple[str, re.Pattern]] = [
 class Plan:
     values: dict[str, str]
     files: dict[str, str]
+    supplements: list[str] = field(default_factory=list)
 
 
 def load_plan(package_dir: Path) -> tuple[Plan, dict]:
@@ -92,7 +96,8 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
         "manuscript_file": str(manuscript) if manuscript else "",
         "cover_letter_file": str(package_dir / "cover_letter.docx") if (package_dir / "cover_letter.docx").exists() else "",
     }
-    return Plan(values, {k: v for k, v in files.items() if v}), meta
+    supplements = sorted(str(p) for p in (package_dir / "supplementary").glob("*") if p.is_file())
+    return Plan(values, {k: v for k, v in files.items() if v}, supplements), meta
 
 
 # Person-detail fields (e.g. an author's "Title: Dr/Prof") must never get manuscript text.
@@ -112,6 +117,7 @@ def match_field(label: str, is_file: bool) -> str | None:
 def fill_page(page, plan: Plan, log=print) -> int:
     filled = 0
     used_files: set[str] = set()
+    saw_file_input = False
     idx = 0
     for frame in page.frames:
         try:
@@ -121,12 +127,21 @@ def fill_page(page, plan: Plan, log=print) -> int:
         idx += len(fields) + 1
         for f in fields:
             is_file = f["type"] == "file"
+            saw_file_input |= is_file
             key = match_field(f["label"], is_file)
             if not key:
                 continue
             loc = frame.locator(f'[data-jf-idx="{f["idx"]}"]')
             try:
-                if is_file:
+                if is_file and key == "supplementary_file":
+                    left = [p for p in plan.supplements if p not in used_files]
+                    if not left:
+                        continue
+                    batch = left if f.get("multiple") else left[:1]
+                    loc.set_input_files(batch)
+                    used_files.update(batch)
+                    log(f"  uploaded {', '.join(Path(p).name for p in batch)}  ->  {f['label'][:70]}")
+                elif is_file:
                     path = plan.files.get(key)
                     if not path or path in used_files:
                         continue
@@ -144,6 +159,11 @@ def fill_page(page, plan: Plan, log=print) -> int:
                 filled += 1
             except Exception as e:
                 log(f"  could not fill {key}: {e}")
+    if saw_file_input and plan.supplements and not any(p in used_files for p in plan.supplements):
+        folder = Path(plan.supplements[0]).parent
+        log(f"  Supplementary files were not uploaded: this page has no field labelled 'supplementary'. "
+            f"If the site uses one upload box with a 'file type' list, upload them there yourself "
+            f"from {folder} and choose 'Supplementary material'.")
     return filled
 
 

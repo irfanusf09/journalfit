@@ -62,6 +62,10 @@
   .warn { color: var(--warn); font-size: 14px; }
   .bad { color: var(--bad); }
   .ok { color: var(--ok); }
+  ul.files { list-style: none; padding: 0; margin: 10px 0 0; }
+  ul.files li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
+  ul.files button { padding: 2px 10px; font-size: 13px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
   pre.doc { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
             padding: 12px; font: 14px/1.5 inherit; max-height: 380px; overflow: auto; }
@@ -111,6 +115,11 @@
     <div class="drop" id="msDrop"><strong id="msLabel">Drop your manuscript here</strong>
       <span class="muted">Word (.docx), PDF, LaTeX (.tex) or text. Or click to choose.</span></div>
     <input type="file" id="msInput" accept=".docx,.pdf,.tex,.txt,.md" class="hidden">
+    <h3 style="font-size:16px;margin:18px 0 8px">Supplementary files <span class="muted">(optional)</span></h3>
+    <div class="drop" id="suppDrop"><strong>Drop supplementary files here</strong>
+      <span class="muted">Any type: data, appendices, extra figures, videos… You can add several. Or click to choose.</span></div>
+    <input type="file" id="suppInput" multiple class="hidden">
+    <ul id="suppList" class="files"></ul>
   </section>
 
   <!-- Step 2 -->
@@ -215,7 +224,7 @@
 <script>
 const TOKEN = "__TOKEN__";
 const $ = (id) => document.getElementById(id);
-let state = {}, manuscript = null, findJob = null, pkg = null;
+let state = {}, manuscript = null, findJob = null, pkg = null, supplements = [];
 
 async function api(path, body, opts = {}) {
   const res = await fetch(path, {
@@ -250,12 +259,34 @@ function updateFindButton() {
 
 function setupDrop(dropId, inputId, onFile) {
   const drop = $(dropId), input = $(inputId);
+  const each = async (files) => { for (const f of files) await onFile(f); input.value = ""; };
   drop.onclick = () => input.click();
-  input.onchange = () => input.files[0] && onFile(input.files[0]);
+  input.onchange = () => each([...input.files]);
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0]); };
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over");
+    each(input.multiple ? [...e.dataTransfer.files] : [...e.dataTransfer.files].slice(0, 1)); };
 }
+
+function fmtSize(n) { return n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " KB"; }
+
+function showSupplements() {
+  $("suppList").innerHTML = supplements.map((f, i) =>
+    `<li><span>📎 ${esc(f.name)} <span class="muted">${fmtSize(f.size)}</span></span><button data-i="${i}">Remove</button></li>`).join("");
+  $("suppList").querySelectorAll("button").forEach(b => b.onclick = async () => {
+    const f = supplements.splice(+b.dataset.i, 1)[0];
+    try { await api("/api/upload?kind=remove-supplement", new Blob([]), {headers: {"X-Filename": encodeURIComponent(f.name)}}); } catch (e) {}
+    showSupplements();
+  });
+}
+
+setupDrop("suppDrop", "suppInput", async (file) => {
+  try {
+    const f = await upload("supplement", file);
+    supplements = supplements.filter(x => x.name !== f.name).concat([f]);
+    showSupplements();
+  } catch (e) { alert(file.name + ": " + e.message); }
+});
 
 async function upload(kind, file) {
   return api("/api/upload?kind=" + kind, file, {headers: {"X-Filename": encodeURIComponent(file.name)}});
@@ -351,7 +382,7 @@ async function prepare(index, name) {
   $("pkgJournal").textContent = name;
   $("pkgCard").scrollIntoView({behavior: "smooth"});
   try {
-    const {job} = await api("/api/prepare", {find_job: findJob, index});
+    const {job} = await api("/api/prepare", {find_job: findJob, index, supplements: supplements.map(f => f.path)});
     await poll(job, $("pkgLog"), (j) => {
       if (j.status !== "done") return;
       pkg = j.result;

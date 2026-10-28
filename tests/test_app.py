@@ -61,6 +61,15 @@ def test_click_through(server):
 
         page.set_input_files("#msInput", str(paper))
         page.wait_for_selector("text=✓ my paper.docx")
+        s1, s2 = tmp / "data S1.xlsx", tmp / "appendix.pdf"
+        s1.write_bytes(b"x" * 2000)
+        s2.write_bytes(b"y" * 3000)
+        page.set_input_files("#suppInput", [str(s1), str(s2)])
+        page.wait_for_selector("#suppList li >> nth=1")
+        page.set_input_files("#suppInput", str(s2))  # same file again replaces, not duplicates
+        page.click("#suppList li >> nth=0 >> text=Remove")  # remove "data S1.xlsx"
+        page.wait_for_function("document.querySelectorAll('#suppList li').length === 1")
+        assert "appendix.pdf" in page.inner_text("#suppList")
         page.fill("#min_acceptance", "")  # Carbon's publisher page lists 25%, others don't publish
         page.click("#findBtn")
         page.wait_for_selector("#resultsCard:not(.hidden)", timeout=20000)
@@ -97,6 +106,8 @@ def test_click_through(server):
 
     pkgs = list((tmp / "out").glob("*/carbon"))
     assert pkgs and (pkgs[0] / "checklist.md").exists() and (pkgs[0] / "manuscript.docx").exists()
+    assert sorted(p.name for p in (pkgs[0] / "supplementary").iterdir()) == ["appendix.pdf"]
+    assert "appendix.pdf" in (pkgs[0] / "checklist.md").read_text()
 
 
 def test_api_requires_token(server):

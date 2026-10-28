@@ -23,9 +23,28 @@ SCHOLARONE_LIKE = """
 <input type="submit" value="Submit">
 </form>
 <iframe srcdoc='<label for="f">Upload main manuscript file</label><input id="f" type="file">
-  <label for="c">Cover letter</label><input id="c" type="file">'></iframe>
+  <label for="c">Cover letter</label><input id="c" type="file">
+  <label for="s1">Supplementary material</label><input id="s1" type="file">
+  <label for="s2">Supporting information (multiple)</label><input id="s2" type="file" multiple>'></iframe>
 </body></html>
 """
+
+
+def test_supplement_hint_when_no_supplement_field(tmp_path):
+    from journalfit.submit.assistant import Plan
+
+    plan = Plan({}, {"manuscript_file": str(tmp_path / "m.docx")}, [str(tmp_path / "s" / "a.csv")])
+    (tmp_path / "m.docx").write_bytes(b"x")
+    from playwright.sync_api import sync_playwright
+
+    logs = []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content('<label for="f">Upload file</label><input id="f" type="file">')
+        fill_page(page, plan, log=logs.append)
+        b.close()
+    assert any("Supplementary files were not uploaded" in line for line in logs)
 
 
 def test_match_field_guards():
@@ -42,6 +61,9 @@ def test_fill_page(tmp_path):
     (pkg / "manuscript.docx").write_bytes(b"x")
     (pkg / "cover_letter.docx").write_bytes(b"y")
     (pkg / "cover_letter.txt").write_text("Dear Editor")
+    (pkg / "supplementary").mkdir()
+    for n in ("a.csv", "b.pdf", "c.mp4"):
+        (pkg / "supplementary" / n).write_bytes(b"z")
     (pkg / "metadata.json").write_text(json.dumps({
         "journal": "J", "title": "A study of graphene interlayers in lithium sulfur batteries for long life",
         "abstract": "We show things.", "keywords": ["graphene", "Li-S"], "submission_url": "http://x"}))
@@ -58,7 +80,7 @@ def test_fill_page(tmp_path):
         vals = {k: page.input_value(f'[name="{k}"]') for k in
                 ("MANUSCRIPT_TITLE", "RUNNING_HEAD", "ABSTRACT", "kw", "author_title", "other_title")}
         frame = page.frames[1]
-        uploads = frame.evaluate("[...document.querySelectorAll('input[type=file]')].map(e => e.files[0]?.name)")
+        uploads = frame.evaluate("[...document.querySelectorAll('input[type=file]')].map(e => [...e.files].map(f => f.name).join(','))")
         browser.close()
 
     assert vals["MANUSCRIPT_TITLE"].startswith("A study of graphene")
@@ -67,5 +89,5 @@ def test_fill_page(tmp_path):
     assert vals["kw"] == "graphene; Li-S"
     assert vals["author_title"] == ""  # person-detail field untouched
     assert vals["other_title"] == "keep me"  # never overwrites
-    assert uploads == ["manuscript.docx", "cover_letter.docx"]
-    assert n == 6
+    assert uploads == ["manuscript.docx", "cover_letter.docx", "a.csv", "b.pdf,c.mp4"]
+    assert n == 8

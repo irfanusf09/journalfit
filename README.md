@@ -51,7 +51,7 @@ journalfit app --shortcut   # once: puts a "JournalFit" icon on your Desktop
 
 Double-click the icon and a page opens in your browser (it runs only on your computer). From there you:
 
-1. drag in your manuscript;
+1. drag in your manuscript, plus any supplementary files;
 2. tick your rules;
 3. click **Find journals**;
 4. click **Prepare submission** on the journal you want;

@@ -151,7 +151,7 @@ def _cand_json(c) -> dict:
     }
 
 
-def run_prepare(job: Job, find_job: Job, index: int) -> dict:
+def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> dict:
     from .prepare import build_package
 
     res = find_job.data["result"]
@@ -162,7 +162,7 @@ def run_prepare(job: Job, find_job: Job, index: int) -> dict:
     if claude:
         job.say("AI is reading the author guidelines and writing the cover letter (1-3 minutes)...")
         before = claude.cost.usd
-    pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"])
+    pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"], supplements=supplements)
     meta = json.loads((pkg / "metadata.json").read_text())
     cover = pkg / "cover_letter.txt"
     job.say("Package ready.")
@@ -174,6 +174,7 @@ def run_prepare(job: Job, find_job: Job, index: int) -> dict:
         "cover_letter": cover.read_text() if cover.exists() else "",
         "submission_url": meta.get("submission_url") or "",
         "files": sorted(p.name for p in pkg.iterdir()),
+        "supplementary": meta.get("supplementary_files", []),
     }
 
 
@@ -281,6 +282,15 @@ def import_upload(kind: str, name: str, data: bytes) -> dict:
         dest = UPLOADS / safe
         dest.write_bytes(data)
         return {"path": str(dest), "name": safe}
+    if kind == "supplement":
+        folder = UPLOADS / "supplementary"
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / safe
+        dest.write_bytes(data)
+        return {"path": str(dest), "name": safe, "size": len(data)}
+    if kind == "remove-supplement":
+        (UPLOADS / "supplementary" / safe).unlink(missing_ok=True)
+        return {"ok": True}
     if kind == "scimago":
         head = data[:500].decode("utf-8", "replace").lstrip("﻿")
         if not (head.startswith("Rank;") and "Issn" in head):
@@ -386,7 +396,11 @@ class Handler(BaseHTTPRequestHandler):
                 find_job = JOBS.get(body.get("find_job", ""))
                 if not find_job or find_job.status != "done":
                     raise ValueError("Run 'Find journals' first.")
-                return self._json({"job": start_job(run_prepare, find_job, int(body["index"])).id})
+                supp_root = (UPLOADS / "supplementary").resolve()
+                supplements = [str(Path(p).resolve()) for p in body.get("supplements") or []]
+                if any(supp_root not in Path(p).parents or not Path(p).is_file() for p in supplements):
+                    raise ValueError("Supplementary files must be added with the upload box.")
+                return self._json({"job": start_job(run_prepare, find_job, int(body["index"]), supplements).id})
             if u.path == "/api/open-folder":
                 p = Path(body["path"]).resolve()
                 if OUTPUT_DIR.resolve() not in [p, *p.parents]:

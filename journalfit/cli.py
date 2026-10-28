@@ -153,7 +153,11 @@ def cmd_prepare(a, ms=None, cand=None, claude=None):
     if ms is None:
         ms = _load_manuscript(a.manuscript, claude)
     console.print(f"Preparing submission package for [bold]{cand.journal.name}[/bold]...")
-    out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path))
+    supplements = a.supplement or []
+    for f in supplements:
+        if not Path(f).is_file():
+            raise SystemExit(f"Supplementary file not found: {f}")
+    out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path), supplements=supplements)
     console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · metadata.json · manuscript copy")
     console.print((out / "checklist.md").read_text())
     _cost(claude)
@@ -288,6 +292,8 @@ def main(argv=None):
         s = sub.add_parser(name, help=hlp)
         s.add_argument("manuscript")
         s.add_argument("--pick", default="1", help="rank number or journal name from the shortlist (default 1)")
+        s.add_argument("--supplement", action="append", metavar="FILE",
+                       help="supplementary file to include (repeat for several)")
         s.add_argument("--author-name")
         s.add_argument("--author-email")
         s.add_argument("--author-affiliation")

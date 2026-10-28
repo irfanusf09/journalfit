@@ -15,12 +15,19 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
-def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: Path, http=None) -> Path:
+def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: Path, http=None,
+                  supplements: list[str] | None = None) -> Path:
     j = cand.journal
     out = out_root / slug(j.name)
     out.mkdir(parents=True, exist_ok=True)
     src = Path(ms.path)
     shutil.copy2(src, out / f"manuscript{src.suffix}")
+    supp_dir = out / "supplementary"
+    if supp_dir.exists():
+        shutil.rmtree(supp_dir)  # the package always reflects the files given this time
+    for f in supplements or []:
+        supp_dir.mkdir(exist_ok=True)
+        shutil.copy2(f, supp_dir / Path(f).name)
 
     guide: dict = {}
     if llm:
@@ -53,9 +60,10 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         "submission_system": guide.get("submission_system"),
         "submission_url": guide.get("submission_url"),
         "guidelines_url": guide.get("guidelines_url"),
+        "supplementary_files": sorted(p.name for p in supp_dir.glob("*")) if supp_dir.exists() else [],
     }
     (out / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    (out / "checklist.md").write_text(_checklist(ms, cand, guide), encoding="utf-8")
+    (out / "checklist.md").write_text(_checklist(ms, cand, guide, metadata["supplementary_files"]), encoding="utf-8")
     return out
 
 
@@ -68,7 +76,7 @@ def _write_docx(path: Path, text: str) -> None:
     d.save(str(path))
 
 
-def _checklist(ms: Manuscript, cand: Candidate, guide: dict) -> str:
+def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[str] = ()) -> str:
     j = cand.journal
     lines = [f"# Submission checklist — {j.name}", ""]
     if guide.get("error"):
@@ -96,6 +104,8 @@ def _checklist(ms: Manuscript, cand: Candidate, guide: dict) -> str:
     items = guide.get("required_items") or ["Title page", "Conflict of interest statement",
                                             "Data availability statement", "Author contributions"]
     lines += [f"- [ ] {item}" for item in items]
+    if supplements:
+        lines += ["", "## Supplementary files in this package"] + [f"- [ ] {n}" for n in supplements]
     lines += ["", "## Before you click Submit",
               "- [ ] All co-authors have approved this version and the journal choice",
               "- [ ] The manuscript is not under consideration at any other journal",
