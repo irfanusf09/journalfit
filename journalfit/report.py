@@ -98,6 +98,10 @@ def write_report(res: FindResult, out_dir: Path) -> Path:
         "excluded": [{"journal": c.journal.name, "reason": c.excluded_reason} for c in res.excluded],
     }
     (out_dir / "shortlist.json").write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    if res.trace:
+        (out_dir / "diagnostics.txt").write_text(
+            "JournalFit diagnostics: what each metric source returned.\n" + "\n".join(res.trace) + "\n",
+            encoding="utf-8")
     return path
 
 

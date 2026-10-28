@@ -134,6 +134,7 @@ def run_find(job: Job, body: dict) -> dict:
         job.say(claude.cost.summary())
     return {
         "title": ms.title, "criteria": criteria.describe(), "notes": res.notes, "report": str(report),
+        "folder": str(out),
         "ranked": [_cand_json(c) for c in res.ranked],
         "excluded": [{"name": c.journal.name, "publisher": c.journal.publisher, "reason": c.excluded_reason}
                      for c in sorted(res.excluded, key=lambda c: -c.text_fit)[:25]],

@@ -220,6 +220,9 @@ def test_finder_end_to_end(tmp_path, monkeypatch):
     carbon = res.ranked[0].journal.metrics
     assert carbon.days_to_first_decision == 28 and carbon.acceptance_rate == 25 and carbon.quartile == "Q1"
     assert "insights" in carbon.sources["days_to_first_decision"]
+    diag = "\n".join(res.trace)
+    assert "Carbon (Elsevier BV)" in diag and "metrics on page: days_to_first_decision=28" in diag
+    assert "link.springer.com/journal/99999" in diag
 
 
 def test_report_roundtrip(tmp_path, monkeypatch):
@@ -237,6 +240,7 @@ def test_report_roundtrip(tmp_path, monkeypatch):
     c = candidate_from_dict(data["ranked"][0])
     assert c.journal.name == res.ranked[0].journal.name
     assert "## 1." in (tmp_path / "out" / "shortlist.md").read_text()
+    assert "fetched https://www.sciencedirect.com" in (tmp_path / "out" / "diagnostics.txt").read_text()
 
 
 SCIMAGO_2025 = (

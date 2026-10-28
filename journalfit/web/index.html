@@ -158,6 +158,8 @@
   <section class="card hidden" id="resultsCard">
     <h2><span class="step">3</span> Best journals for your paper</h2>
     <p class="muted" id="resultsInfo"></p>
+    <div class="row" style="margin-top:0;margin-bottom:8px"><button id="openResults">Open results folder</button>
+      <span class="muted">The report, plus diagnostics.txt showing what each website returned.</span></div>
     <div id="results"></div>
     <details id="excludedBox"><summary>Journals that matched the topic but broke a rule</summary>
       <ul id="excluded" class="muted"></ul></details>
@@ -344,6 +346,7 @@ function fmt(v, suffix) { return v === null || v === undefined ? null : `${+(+v)
 function showResults(r) {
   $("resultsCard").classList.remove("hidden");
   $("resultsInfo").textContent = `Rules: ${r.criteria}. Full report saved to ${r.report}`;
+  $("openResults").onclick = async () => { try { await api("/api/open-folder", {path: r.folder}); } catch (e) { alert(e.message); } };
   const box = $("results");
   box.innerHTML = r.ranked.length ? "" : `<p class="bad">${esc(r.notes.join(" ") || "No journal met every rule.")}</p>`;
   r.ranked.forEach((c, i) => {

@@ -19,6 +19,7 @@ from typing import Any
 
 import requests
 
+from . import trace
 from .models import Candidate, Journal, Manuscript, Metrics
 
 # Approximate USD prices per million tokens (input, output) and per web search.
@@ -521,16 +522,20 @@ class DeepSeek(LLM):
     FETCH_URL = "https://api.deepseek.com/v1/tools/fetch"
 
     def _tool(self, url: str, body: dict) -> dict | None:
+        what = url.rsplit("/", 1)[-1]
         try:
             r = requests.post(url, json=body, timeout=60, headers={"Authorization": f"Bearer {self.key}"})
-        except requests.RequestException:
+        except requests.RequestException as e:
+            trace.note(f"    DeepSeek {what}: network error {e}")
             return None
         if r.status_code != 200:
+            trace.note(f"    DeepSeek {what}: HTTP {r.status_code} {_err(r)[:200]}")
             return None
         self.cost.add_requests(self.provider)
         try:
             return r.json()
         except ValueError:
+            trace.note(f"    DeepSeek {what}: response was not JSON: {r.text[:200]!r}")
             return None
 
     def web_pages(self, query, j, limit=2, skip=None):
@@ -538,6 +543,10 @@ class DeepSeek(LLM):
 
         data = self._tool(self.SEARCH_URL, {"query": query[:128], "count": 10})
         results = _find_list(data or {})
+        trace.note(f"    DeepSeek search '{query[:80]}': {len(results)} results"
+                   + ("" if results or data is None else f"; response keys: {list(data)[:10] if isinstance(data, dict) else type(data).__name__}"))
+        for r in results[:10]:
+            trace.note(f"      - {r.get('url') or r.get('link') or sorted(r)[:6]}")
         own = urlparse(j.homepage).netloc.lower().removeprefix("www.") if j.homepage else ""
         official = []
         for r in results:
@@ -546,9 +555,12 @@ class DeepSeek(LLM):
             if url and url not in (skip or set()) and ((own and own in host) or host.endswith(OFFICIAL_HOSTS)):
                 official.append(url)
         pages: dict[str, str] = {}
+        trace.note(f"    official pages kept: {official[:limit] or 'none'}")
         for url in official[:limit]:
             got = self._tool(self.FETCH_URL, {"url": url})
             text = _find_text(got or {})
+            trace.note(f"    DeepSeek fetch {url}: " + (f"{len(text):,} chars" if text else
+                       f"no text; response keys: {list(got)[:10] if isinstance(got, dict) else got!r:.100}"))
             if text:
                 pages[url] = text
         return pages

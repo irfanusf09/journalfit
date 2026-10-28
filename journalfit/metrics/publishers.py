@@ -14,6 +14,7 @@ from typing import Callable
 from urllib.parse import urlparse
 
 from .. import config
+from .. import trace
 from ..http import FetchError, HttpClient
 from ..models import Journal, Metrics
 from .extract import extract_metrics, page_text
@@ -101,10 +102,16 @@ class PageFetcher:
         try:
             html = self.http.get_text(url)
             if not _looks_blocked(html):
+                trace.note(f"    fetched {url} ({len(html):,} chars)")
                 return html
-        except FetchError:
-            pass
-        return self._browser_get(url) if self.use_browser else None
+            trace.note(f"    {url}: bot check page, trying browser")
+        except FetchError as e:
+            trace.note(f"    {url}: {e}")
+        if not self.use_browser:
+            return None
+        html = self._browser_get(url)
+        trace.note(f"    browser {url}: " + (f"ok ({len(html):,} chars)" if html else "blocked or failed"))
+        return html
 
     def _browser_get(self, url: str) -> str | None:
         try:
@@ -146,7 +153,13 @@ def scrape_metrics(j: Journal, fetcher: PageFetcher) -> tuple[Metrics, dict[str,
         if not html:
             continue
         pages[url] = page_text(html)
-        found.merge(extract_metrics(pages[url], url))
+        got = extract_metrics(pages[url], url)
+        found.merge(got)
+        hits = {k: v for k, v in got.sources.items()}
+        trace.note(f"    metrics on page: {', '.join(f'{k}={getattr(got, k)}' for k in hits) or 'none'}")
+        if not hits:
+            for snip in trace.snippets(pages[url]):
+                trace.note(f"      {snip}")
         if found.days_to_first_decision is not None and found.acceptance_rate is not None:
             break
     return found, pages

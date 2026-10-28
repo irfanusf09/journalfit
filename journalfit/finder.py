@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
-from . import config
+from . import config, trace
 from .config import Criteria
 from .http import FetchError, HttpClient
 from .metrics.publishers import PageFetcher, load_overrides, scrape_metrics
@@ -28,6 +28,7 @@ class FindResult:
     ranked: list[Candidate]
     excluded: list[Candidate] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    trace: list[str] = field(default_factory=list)
 
 
 class Finder:
@@ -160,12 +161,14 @@ class Finder:
         for i, c in enumerate(cands, 1):
             j = c.journal
             self.log(f"  [{i}/{len(cands)}] metrics: {j.name}")
+            trace.note(f"\n[{i}] {j.name} ({j.publisher}) homepage={j.homepage or '-'}")
             for issn in j.issns:
                 if norm_issn(issn) in overrides:
                     j.metrics.merge(overrides[norm_issn(issn)])
             cached = cache.get(j.openalex_id)
             if cached:
                 j.metrics.merge(cached)
+                trace.note("    using AI metrics remembered from an earlier run")
             scraped, pages = scrape_metrics(j, self.fetcher)
             j.metrics.merge(scraped)
             missing = j.metrics.days_to_first_decision is None or \
@@ -175,14 +178,19 @@ class Finder:
                     found = self.llm.lookup_metrics(j, pages)
                     j.metrics.merge(found)
                     cache.put(j.openalex_id, found)
+                    trace.note(f"    AI lookup: {', '.join(f'{k}={getattr(found, k)}' for k in found.sources) or 'nothing found'}")
                 except Exception as e:  # a failed lookup leaves the metric unknown, never guessed
                     c.warnings.append(f"metric lookup failed: {e}")
+                    trace.note(f"    AI lookup failed: {e}")
+            elif web_lookup and self.llm and missing and not cached:
+                trace.note(f"    no AI lookup (only the best {lookup_top} journals get one)")
         cache.save()
 
     # ---------------------------------------------------------------- pipeline
     def find(self, ms: Manuscript, criteria: Criteria, top: int = 10, metrics_for: int = 25,
              web_lookup: bool = True, lookup_top: int = 8) -> FindResult:
         notes: list[str] = []
+        trace.start()
         if criteria.scopus and not self.indexing.available:
             raise RuntimeError("Scopus data not downloaded yet. Run: journalfit data update")
 
@@ -227,7 +235,8 @@ class Finder:
 
         if self.llm and kept:
             self.log("Reviewing scope fit of the finalists...")
-            review = sorted(kept, key=lambda c: -c.text_fit)[:max(top + 5, 15)]
+            # Every finalist gets a scope rating, so none is ranked without an editor's view.
+            review = sorted(kept, key=lambda c: -(c.text_fit + 0.1 * min(c.reference_hits, 5)))[:30]
             try:
                 self.llm.review_scope(ms, review)
             except Exception as e:
@@ -239,7 +248,7 @@ class Finder:
         kept.sort(key=lambda c: -c.score)
         if not kept:
             notes.append("No journal met every rule. Loosen a threshold or use --if-missing keep.")
-        return FindResult(ms, criteria, kept[:top], excluded, notes)
+        return FindResult(ms, criteria, kept[:top], excluded, notes, trace.lines())
 
 
 class MetricCache:
