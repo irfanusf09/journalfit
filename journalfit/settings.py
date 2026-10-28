@@ -50,6 +50,22 @@ def author(s: dict | None = None) -> dict:
     return {k: s[f"author_{k}"] for k in ("name", "email", "affiliation") if s.get(f"author_{k}")}
 
 
+DECLARATION_FIELDS = {
+    "competing_interests": "Competing interests",
+    "funding": "Funding",
+    "data_availability": "Data availability",
+    "ethics": "Ethics approval / consent",
+    "preprint": "Preprint",
+    "author_contributions": "Author contributions",
+}
+
+
+def declarations(s: dict | None = None) -> dict:
+    s = s if s is not None else load()
+    d = s.get("declarations") or {}
+    return {k: str(d.get(k, "")).strip() for k in DECLARATION_FIELDS if str(d.get(k, "")).strip()}
+
+
 def make(provider: str | None = None, model: str | None = None):
     """Build the configured AI provider, or raise LLMError explaining what's missing."""
     from .llm import make_llm

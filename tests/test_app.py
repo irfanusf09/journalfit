@@ -110,12 +110,15 @@ def test_click_through(server):
         assert page.inner_text("#keyLabel") == "DeepSeek API key"
         page.fill("#s_key", "sk-deepseek-test")
         page.fill("#s_name", "Dr Test")
+        page.click("#declBox summary")
+        page.fill("#d_competing_interests", "The authors declare no competing interests.")
         page.click("#saveSettings")
         page.wait_for_selector("#keyCard", state="hidden")
         assert "DeepSeek" in page.inner_text("#aiName")
         state = page.evaluate("fetch('/api/state', {headers: {'X-Token': TOKEN}}).then(r => r.json())")
         assert state["has_api_key"] and state["keys_set"] == ["DEEPSEEK_API_KEY"]
         assert "keys" not in state["settings"] and "sk-deepseek" not in str(state)
+        assert state["settings"]["declarations"]["competing_interests"] == "The authors declare no competing interests."
 
         # Switching provider keeps the saved DeepSeek key but needs a key of its own.
         page.click("#settingsBtn")

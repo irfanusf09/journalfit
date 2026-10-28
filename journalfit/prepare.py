@@ -16,7 +16,7 @@ def slug(s: str) -> str:
 
 
 def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: Path, http=None,
-                  supplements: list[str] | None = None) -> Path:
+                  supplements: list[str] | None = None, declarations: dict | None = None) -> Path:
     j = cand.journal
     out = out_root / slug(j.name)
     out.mkdir(parents=True, exist_ok=True)
@@ -47,7 +47,8 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
                 guide["guidelines_url"] = url
         except Exception as e:
             guide = {"error": str(e)}
-        letter = llm.cover_letter(ms, j, author, cand.scope_reason, guide.get("required_items") or [])
+        letter = llm.cover_letter(ms, j, author, cand.scope_reason, guide.get("required_items") or [],
+                                  declarations or {})
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 
@@ -61,9 +62,11 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         "submission_url": guide.get("submission_url"),
         "guidelines_url": guide.get("guidelines_url"),
         "supplementary_files": sorted(p.name for p in supp_dir.glob("*")) if supp_dir.exists() else [],
+        "declarations": declarations or {},
     }
     (out / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    (out / "checklist.md").write_text(_checklist(ms, cand, guide, metadata["supplementary_files"]), encoding="utf-8")
+    (out / "checklist.md").write_text(_checklist(ms, cand, guide, metadata["supplementary_files"], declarations or {}),
+                                      encoding="utf-8")
     return out
 
 
@@ -76,7 +79,8 @@ def _write_docx(path: Path, text: str) -> None:
     d.save(str(path))
 
 
-def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[str] = ()) -> str:
+def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[str] = (),
+               declarations: dict | None = None) -> str:
     j = cand.journal
     lines = [f"# Submission checklist — {j.name}", ""]
     if guide.get("error"):
@@ -103,6 +107,14 @@ def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[s
     lines += ["- [ ] All co-authors have approved this version and the journal choice",
               "- [ ] The manuscript is not under consideration at any other journal",
               "- [ ] Cover letter read, and [placeholders] filled in"]
+    if declarations:
+        from .settings import DECLARATION_FIELDS
+
+        lines += ["", "## Your declarations (used in the cover letter and the submission forms)"]
+        lines += [f"- {DECLARATION_FIELDS.get(k, k)}: {v}" for k, v in declarations.items()]
+    else:
+        lines += ["", "Tip: add your declarations (competing interests, funding, data availability...) "
+                      "in Settings and they'll be filled in for you."]
     if supplements:
         lines += ["", "## Supplementary files in this package"] + [f"- {n}" for n in supplements]
 

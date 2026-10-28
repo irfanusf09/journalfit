@@ -163,7 +163,10 @@ def cmd_prepare(a, ms=None, cand=None, claude=None):
     for f in supplements:
         if not Path(f).is_file():
             raise SystemExit(f"Supplementary file not found: {f}")
-    out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path), supplements=supplements)
+    from . import settings
+
+    out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path), supplements=supplements,
+                        declarations=settings.declarations())
     console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · metadata.json · manuscript copy")
     console.print((out / "checklist.md").read_text())
     _cost(claude)

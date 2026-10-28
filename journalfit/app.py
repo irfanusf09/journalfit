@@ -171,7 +171,8 @@ def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> 
     if claude:
         job.say("AI is reading the author guidelines and writing the cover letter (1-3 minutes)...")
         before = claude.cost.usd
-    pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"], supplements=supplements)
+    pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"], supplements=supplements,
+                        declarations=settings_mod.declarations())
     meta = json.loads((pkg / "metadata.json").read_text())
     cover = pkg / "cover_letter.txt"
     job.say("Package ready.")
@@ -422,6 +423,9 @@ class Handler(BaseHTTPRequestHandler):
                         s["keys"][name] = v.strip()
                 if body.get("provider") and body["provider"] not in PROVIDERS:
                     raise ValueError("unknown provider")
+                if isinstance(body.get("declarations"), dict):
+                    s["declarations"] = {k: str(v).strip() for k, v in body["declarations"].items()
+                                         if k in settings_mod.DECLARATION_FIELDS}
                 for k in ("provider", "author_name", "author_affiliation", "author_email"):
                     if k in body:
                         s[k] = str(body[k]).strip()

@@ -83,7 +83,10 @@ COLLECT_JS = r"""
     if (rich) value = txt(el);
     if (tag === 'select') value = el.selectedIndex > 0 ? txt(el.options[el.selectedIndex]) : '';
     const bits = labelsFor(el);
+    const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
+      /\*|required/i.test(bits.slice(0, 2).join(' '));
     out.push({idx: idx++, type, tag, bits, label: bits.join(' | '), value, multiple: !!el.multiple,
+              maxlength: el.maxLength > 0 ? el.maxLength : 0, required,
               options: tag === 'select' ? [...el.options].map(o => txt(o)) : []});
   }
   return out;
@@ -97,6 +100,11 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
     ("abstract", re.compile(r"\babstract\b", re.I)),
     ("keywords", re.compile(r"key[\s_-]*words?|index terms", re.I)),
     ("cover_letter", re.compile(r"cover[\s_-]*letter|comments?\s+to\s+(the\s+)?editor", re.I)),
+    ("competing_interests", re.compile(r"competing\s+interest|conflicts?\s+of\s+interest|declaration\s+of\s+interest", re.I)),
+    ("funding_statement", re.compile(r"funding\s+(statement|information|sources?)|financial\s+support|role\s+of\s+the\s+funding", re.I)),
+    ("data_availability", re.compile(r"data\s+availability|availability\s+of\s+data|data\s+(access|sharing)\s+statement", re.I)),
+    ("ethics", re.compile(r"ethic(s|al)\s+(approval|statement|declaration)|informed\s+consent", re.I)),
+    ("author_contributions", re.compile(r"author(s'?)?\s+contributions?|credit\s+(author\s+)?statement", re.I)),
     ("article_type", re.compile(r"(article|manuscript|submission|paper)[\s_-]*type|type\s+of\s+(article|manuscript|paper|submission)", re.I)),
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
@@ -112,6 +120,7 @@ class Plan:
     values: dict[str, str]
     files: dict[str, str]
     supplements: list[str] = field(default_factory=list)
+    last_upload: float = 0.0  # when the last file was handed to the site
 
 
 def running_title(title: str) -> str:
@@ -135,6 +144,14 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
         "cover_letter": cover_txt.read_text(encoding="utf-8") if cover_txt.exists() else "",
         "article_type": meta.get("article_type") or "original research",
     }
+    decl = meta.get("declarations") or {}
+    values.update({
+        "competing_interests": decl.get("competing_interests", ""),
+        "funding_statement": decl.get("funding", ""),
+        "data_availability": decl.get("data_availability", ""),
+        "ethics": decl.get("ethics", ""),
+        "author_contributions": decl.get("author_contributions", ""),
+    })
     manuscript = next(package_dir.glob("manuscript.*"), None)
     files = {
         "manuscript_file": str(manuscript) if manuscript else "",
@@ -145,8 +162,10 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
 
 
 # Person-detail fields (e.g. an author's "Title: Dr/Prof") must never get manuscript text.
-PERSON_FIELD = re.compile(r"author|salutation|prefix|honorific|first[\s_-]*name|last[\s_-]*name|"
-                          r"job|position|degree|reviewer|e-?mail|institution|department", re.I)
+PERSON_FIELD = re.compile(r"author(?!s?'?\s*contribution)|salutation|prefix|honorific|first[\s_-]*name|"
+                          r"last[\s_-]*name|given[\s_-]*name|family[\s_-]*name|surname|job|position|degree|"
+                          r"reviewer|e-?mail|institution|department|affiliation|orcid|phone", re.I)
+DECLARATIONS = ("competing_interests", "funding_statement", "data_availability", "ethics", "author_contributions")
 
 
 def match_field(label: str, is_file: bool) -> str | None:
@@ -160,10 +179,15 @@ def words_of(text: str) -> str:
 
 
 def match_bits(bits: list[str], is_file: bool) -> str | None:
-    """The nearest label text decides: a field's own label beats text further away on the page."""
-    for bit in map(words_of, bits):
-        if not is_file and PERSON_FIELD.search(bit):
-            return None
+    """The nearest label text decides: a field's own label beats text further away on the page.
+
+    Any person-detail wording close to the field (its own label, name or the text just before it)
+    rules it out, so an author's "Title (Dr/Prof)" box never gets the manuscript title.
+    """
+    words = list(map(words_of, bits))
+    if not is_file and any(PERSON_FIELD.search(w) for w in words[:4]):
+        return None
+    for bit in words:
         for key, rx in (FILE_RULES if is_file else FIELD_RULES):
             if rx.search(bit):
                 return key
@@ -194,8 +218,12 @@ ITEM_TYPES = [  # (file key, option pattern) in upload order
 
 def _is_item_type_list(f: dict) -> bool:
     opts = " | ".join(f.get("options") or [])
-    return f["type"] == "select" and bool(re.search(r"manuscript", opts, re.I)) and \
-        bool(re.search(r"cover\s*letter|figure|supplement", opts, re.I))
+    return f["type"] == "select" and bool(re.search(r"manuscript|main\s+document", opts, re.I)) and \
+        bool(re.search(r"cover\s*letter|figure|supplement|title\s+page", opts, re.I))
+
+
+UPLOAD_BUSY = re.compile(r"uploading|upload in progress|please wait|processing your file", re.I)
+UPLOAD_GAP = 6  # seconds between files, so the site finishes one upload before the next starts
 
 
 def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str]) -> str | None:
@@ -214,16 +242,50 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
         pending += [(p, pattern) for p in paths if p and p not in used]
     if not pending:
         return "all files already uploaded"
+    import time
+
+    if time.time() - plan.last_upload < UPLOAD_GAP:
+        return "waiting for the previous upload to finish"
+    try:
+        if UPLOAD_BUSY.search(frame.evaluate("document.body ? document.body.innerText : ''")[:20000]):
+            return "waiting for the previous upload to finish"
+    except Exception:
+        pass
+
+    def choose(lst: dict, pattern) -> str | None:
+        choice = next((o for o in lst.get("options") or [] if pattern.search(o)), None)
+        if choice:
+            frame.locator(f'[data-jf-idx="{lst["idx"]}"]').select_option(label=choice)
+        return choice
+
+    done = []
+    if len(lists) >= 2 and len(inputs) >= 2:
+        # Several upload rows on one page (ScholarOne): one file per row, all at once.
+        for (path, pattern), lst, box in zip(pending, lists, inputs):
+            choice = choose(lst, pattern)
+            if not choice:
+                continue
+            frame.locator(f'[data-jf-idx="{box["idx"]}"]').set_input_files(path)
+            used.add(path)
+            done.append(f"'{choice}': {Path(path).name}")
+        if not done:
+            return "no matching file types in the list (left for you)"
+        plan.last_upload = time.time()
+        left = len(pending) - len(done)
+        return ("chose item type and attached " + "; ".join(done)
+                + ". Click the site's upload button if it has one"
+                + (f"; {left} more file(s) need another row" if left else ""))
+
     path, pattern = pending[0]
-    choice = next((o for o in lists[0].get("options") or [] if pattern.search(o)), None)
+    choice = choose(lists[0], pattern)
     if not choice:
         return f"no item type for {Path(path).name} (left for you)"
-    frame.locator(f'[data-jf-idx="{lists[0]["idx"]}"]').select_option(label=choice)
     frame.wait_for_timeout(800)  # the site may enable its file box after the type is chosen
     # The file box next to the Item Type list, else the first one.
     target = next((f for f in inputs if any(re.search(r"item\s*type", words_of(b), re.I) for b in f["bits"])), inputs[0])
     frame.locator(f'[data-jf-idx="{target["idx"]}"]').set_input_files(path)
     used.add(path)
+    plan.last_upload = time.time()
     left = len(pending) - 1
     return (f"chose item type '{choice}' and uploaded {Path(path).name}"
             + (f"; {left} more file(s) will follow after the site finishes this upload" if left else ""))
@@ -239,6 +301,7 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
     used_files: set[str] = uploaded if uploaded is not None else set()
     saw_file_input = False
     supplements_done = False
+    still_needed: list[str] = []
     idx = 0
     for frame in page.frames:
         try:
@@ -301,9 +364,12 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                 elif f["type"] == "select":
                     action = "list (left for you)"
                 else:
-                    value = plan.values.get(key)
+                    value = fit(plan.values.get(key) or "", key, f.get("maxlength") or 0)
                     if not value:
-                        action = "nothing to put here"
+                        action = "nothing to put here" if key not in DECLARATIONS else \
+                            "add this declaration in Settings to have it filled"
+                    elif key in DECLARATIONS and f["type"] not in ("textarea", "richtext"):
+                        action = "declaration box is a one-line or search field (left for you)"
                     elif key == "abstract" and f["type"] not in ("textarea", "richtext"):
                         action = "abstract box is a one-line field (left for you)"
                     elif f["type"] == "richtext":
@@ -319,6 +385,9 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             except Exception as e:
                 action = f"failed: {e}"
                 log(f"  could not fill {key}: {e}")
+            if f.get("required") and not f["value"].strip() and f["type"] != "file" and \
+                    not action.startswith(("filled", "uploaded", "selected")):
+                still_needed.append(_short_label(f))
             if report is not None:
                 report.append(f"  [{action}] {f['type']} | {f['label'][:220]}")
     if saw_file_input and plan.supplements and not supplements_done and \
@@ -327,7 +396,33 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
         log(f"  Supplementary files were not uploaded: this page has no field labelled 'supplementary'. "
             f"If the site uses one upload box with a 'file type' list, upload them there yourself "
             f"from {folder} and choose 'Supplementary material'.")
+    if still_needed:
+        log("  Still needed from you on this page: " + "; ".join(dict.fromkeys(still_needed)))
+        if report is not None:
+            report.append("  STILL NEEDED: " + "; ".join(dict.fromkeys(still_needed)))
     return filled
+
+
+def _short_label(f: dict) -> str:
+    """A readable name for a field: its first label text that looks like words, not a code name."""
+    for b in f.get("bits") or []:
+        b = b.strip(" *:")
+        if b and " " in b and len(b) < 90:
+            return b
+    return words_of((f.get("bits") or ["a required field"])[0])[:60]
+
+
+def fit(value: str, key: str, maxlength: int) -> str:
+    """Shorten text to a box's character limit sensibly instead of letting the site cut it."""
+    if not maxlength or len(value) <= maxlength:
+        return value
+    if key == "keywords":
+        parts = [p.strip() for p in value.split(";")]
+        while parts and len("; ".join(parts)) > maxlength:
+            parts.pop()
+        return "; ".join(parts)
+    cut = value[:maxlength]
+    return cut[:cut.rfind(" ")].rstrip(" ,;:-") if " " in cut else cut
 
 
 PAGE_SIGNATURE_JS = """() => {

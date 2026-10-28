@@ -299,7 +299,7 @@ class LLM:
             _guide_schema())))
 
     def cover_letter(self, ms: Manuscript, j: Journal, author: dict, scope_reason: str = "",
-                     requirements: list[str] | None = None) -> str:
+                     requirements: list[str] | None = None, declarations: dict | None = None) -> str:
         needs = [r for r in requirements or [] if re.search(r"cover letter|preprint|declar|statement", r, re.I)]
         prompt = (
             f"Write a submission cover letter to the editor of {j.name}.\n"
@@ -309,6 +309,9 @@ class LLM:
             + ("This journal's author guidelines require the following, so include each one that belongs "
                "in a cover letter (use [placeholders] for facts not given, e.g. whether a preprint exists):\n"
                + "\n".join(f"- {r}" for r in needs) + "\n" if needs else "")
+            + ("The authors' own declarations, to use word for word (no placeholders for these):\n"
+               + "\n".join(f"- {k.replace('_', ' ')}: {v}" for k, v in declarations.items()) + "\n"
+               if declarations else "")
             + "\n"
             "Plain text, under 350 words: address the Editor-in-Chief (use 'Dear Editor' if the name "
             "is unknown), state the title and article type, the problem, the two or three main findings "

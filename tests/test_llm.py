@@ -320,3 +320,11 @@ def test_checklist_separates_must_from_can_wait():
     assert "Word count" in must and "Competing interests" in must and "Reference style" not in must
     assert "Reference style" in later and "Times Roman" in later
     assert "accepts any reasonable format" in text
+
+
+def test_cover_letter_uses_declarations_word_for_word():
+    c, msgs = make([resp(json.dumps({"letter": "Dear Editor"}))])
+    c.cover_letter(Manuscript(path="x", title="T", abstract="A"), Journal("S", "J"), {}, "", [],
+                   {"competing_interests": "The authors declare no competing interests."})
+    prompt = msgs.calls[0]["messages"][0]["content"]
+    assert "word for word" in prompt and "The authors declare no competing interests." in prompt

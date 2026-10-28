@@ -233,8 +233,10 @@ def test_editorial_manager_rich_text_title_and_abstract(tmp_path):
     assert not any("cursor" in line for line in report)  # styling code is no longer read as a label
 
 
-def test_editorial_manager_uploads_one_file_at_a_time_with_item_type(tmp_path):
+def test_editorial_manager_uploads_one_file_at_a_time_with_item_type(tmp_path, monkeypatch):
     from playwright.sync_api import sync_playwright
+
+    monkeypatch.setattr("journalfit.submit.assistant.UPLOAD_GAP", 0)
 
     pkg = _pkg(tmp_path)
     (pkg / "cover_letter.docx").write_bytes(b"c")
@@ -265,3 +267,91 @@ def test_field_names_written_as_identifiers_are_understood():
     assert match_field("Rich Text Editor, fullTitleHtml", False) == "title"
     assert match_field("Rich Text Editor, abstractHtml", False) == "abstract"
     assert match_field("txt_Keywords", False) == "keywords"
+
+
+def _run(html, plan, uploaded=None, report=None, logs=None):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(html)
+        page.wait_for_timeout(200)
+        n = fill_page(page, plan, log=(logs.append if logs is not None else (lambda *_: None)),
+                      uploaded=uploaded, report=report)
+        values = page.evaluate("[...document.querySelectorAll('input:not([type=file]), textarea')].map(e => e.value)")
+        files = page.evaluate("[...document.querySelectorAll('input[type=file]')].map(e => [...e.files].map(f => f.name).join(','))")
+        selects = page.evaluate("[...document.querySelectorAll('select')].map(s => s.options[s.selectedIndex].text)")
+        b.close()
+    return n, values, files, selects
+
+
+def test_next_upload_waits_for_the_previous_one(tmp_path):
+    pkg = _pkg(tmp_path)
+    (pkg / "cover_letter.docx").write_bytes(b"c")
+    plan, _ = load_plan(pkg)
+    uploaded = set()
+    logs = []
+    _run(EDITORIAL_MANAGER_UPLOAD, plan, uploaded)
+    _, _, files, _ = _run(EDITORIAL_MANAGER_UPLOAD, plan, uploaded, logs=logs)  # immediately after
+    assert files == ["", ""] and any("waiting for the previous upload" in l for l in logs)
+    plan.last_upload = 0
+    busy = EDITORIAL_MANAGER_UPLOAD.replace("<form>", "<form><p>Uploading manuscript.docx... please wait</p>")
+    _, _, files, _ = _run(busy, plan, uploaded, logs=logs)
+    assert files == ["", ""]  # the site still shows an upload in progress
+
+
+def test_scholarone_rows_are_filled_all_at_once(tmp_path):
+    pkg = _pkg(tmp_path)
+    (pkg / "cover_letter.docx").write_bytes(b"c")
+    (pkg / "supplementary").mkdir()
+    (pkg / "supplementary" / "data.xlsx").write_bytes(b"d")
+    plan, _ = load_plan(pkg)
+    row = ('<tr><td><select><option>Select File Designation</option><option>Main Document</option>'
+           '<option>Title Page</option><option>Cover Letter</option><option>Figure</option>'
+           '<option>Supplementary Material for Review</option></select></td><td><input type="file"></td></tr>')
+    html = "<h3>File Upload</h3><table>" + row * 5 + "</table>"
+    _, _, files, selects = _run(html, plan, set())
+    assert files == ["manuscript.docx", "cover_letter.docx", "data.xlsx", "", ""]
+    assert selects[:3] == ["Main Document", "Cover Letter", "Supplementary Material for Review"]
+
+
+def test_author_title_box_is_never_given_the_manuscript_title(tmp_path):
+    plan, _ = load_plan(_pkg(tmp_path))
+    html = ('<h3>Add Author</h3><div class="author-form">'
+            '<div><label>First Name</label><input type="text"></div>'
+            '<div><span>Title</span><input type="text" name="authorTitle"></div>'
+            '<div><span>Title</span><input type="text" name="ctl00$AuthorBlock$txtTitle"></div></div>')
+    _, values, _, _ = _run(html, plan, set())
+    assert values == ["", "", ""]
+
+
+def test_text_fits_box_limits(tmp_path):
+    from journalfit.submit.assistant import fit
+
+    assert fit("tourism; CO2 emissions; internet; panel data", "keywords", 30) == "tourism; CO2 emissions"
+    assert fit("Does connectivity flatten tourism carbon slope", "running_title", 30) == "Does connectivity flatten"
+    plan, _ = load_plan(_pkg(tmp_path))
+    _, values, _, _ = _run('<div>Short title</div><input type="text" maxlength="25">', plan, set())
+    assert len(values[0]) <= 25 and not values[0].endswith(" ")
+
+
+def test_declarations_go_only_into_multiline_boxes_and_missing_required_fields_are_listed(tmp_path):
+    pkg = _pkg(tmp_path)
+    meta = json.loads((pkg / "metadata.json").read_text())
+    meta["declarations"] = {"competing_interests": "The authors declare no competing interests.",
+                            "funding": "No funding was received."}
+    (pkg / "metadata.json").write_text(json.dumps(meta))
+    plan, _ = load_plan(pkg)
+    html = ('<div>Competing Interests Statement *</div><textarea></textarea>'
+            '<div>Funding information - search the funder registry</div><input type="text" name="funderSearch">'
+            '<div>Funding statement</div><textarea></textarea>'
+            '<div>Data availability statement *</div><textarea required></textarea>'
+            '<div>Is this a special issue submission? *</div><select required><option>Please select</option>'
+            '<option>No</option><option>Yes</option></select>')
+    logs, report = [], []
+    n, values, _, _ = _run(html, plan, set(), report=report, logs=logs)
+    assert values == ["The authors declare no competing interests.", "", "No funding was received.", ""]
+    needed = next(l for l in logs if "Still needed from you" in l)
+    assert "Data availability statement" in needed and "special issue" in needed
+    assert any("add this declaration in Settings" in r for r in report)
