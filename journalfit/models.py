@@ -24,6 +24,8 @@ class Manuscript:
     search_queries: list[str] = field(default_factory=list)
     # Statements found in the manuscript itself (funding, competing interests, ...)
     declarations: dict = field(default_factory=dict)
+    # Text between the title and the abstract: author names, affiliations, emails.
+    front_matter: str = ""
 
     def summary_text(self) -> str:
         """Text used for similarity matching: title + abstract + keywords."""

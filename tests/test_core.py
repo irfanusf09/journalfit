@@ -490,7 +490,23 @@ def test_declarations_are_read_from_the_manuscript():
     assert d["competing_interests"] == "The authors declare that they have no conflict of interest."
     assert d["data_availability"].endswith("which are publicly available.")
     assert d["author_contributions"].startswith("I.Y. designed")
-    assert "ethics" not in d and "thank" not in str(d)
+    assert "ethics" not in d and d["acknowledgements"] == "We thank the referees."
+
+
+def test_declarations_written_as_sentences_with_a_full_stop():
+    from journalfit.manuscript import extract_declarations
+
+    d = extract_declarations([
+        "Declarations",
+        "Informed consent. Informed consent was obtained from all participants.",
+        "Ethics approval. The study was approved by the college's review board.",
+        "Funding. This research received no external funding.",
+        "Declaration of generative AI. During the preparation of this manuscript, the authors used Claude for editing.",
+        "Data availability is discussed in Section 3. We describe the sample there."])
+    assert d["ethics"].startswith("Informed consent was obtained") and "review board" in d["ethics"]
+    assert d["funding"] == "This research received no external funding."
+    assert d["ai_disclosure"].startswith("During the preparation")
+    assert "data_availability" not in d  # a body sentence, not a heading
 
 
 def test_aims_and_scope_passage():

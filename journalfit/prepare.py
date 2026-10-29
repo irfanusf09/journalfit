@@ -16,7 +16,8 @@ def slug(s: str) -> str:
 
 
 def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: Path, http=None,
-                  supplements: list[str] | None = None, declarations: dict | None = None) -> Path:
+                  supplements: list[str] | None = None, declarations: dict | None = None,
+                  authors: list[dict] | None = None, reviewers: list[dict] | None = None, log=None) -> Path:
     j = cand.journal
     out = out_root / slug(j.name)
     out.mkdir(parents=True, exist_ok=True)
@@ -52,8 +53,20 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 
+    say = log or (lambda m: None)
+    declarations = dict(declarations or {})
+    made = make_files(ms, out, guide, llm, author, declarations, authors, say)
+    if reviewers is None:
+        reviewers = suggest_reviewers(ms, cand, made["authors"], guide, http, say)
+    from .submit import people
+
+    people.save(out, "reviewers.json", reviewers)
+
     metadata = {
         "journal": j.name, "publisher": j.publisher, "issn": j.issns,
+        "references": len(ms.references), "abstract_words": len(ms.abstract.split()),
+        "funders": made["funders"], "peer_review": guide.get("peer_review") or "unknown",
+        "generated_files": made["files"],
         "title": ms.title, "abstract": ms.abstract, "keywords": ms.keywords,
         "article_type": ms.article_type, "word_count": ms.word_count,
         "figures": ms.figure_count, "tables": ms.table_count,
@@ -65,9 +78,121 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         "declarations": declarations or {},
     }
     (out / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    (out / "checklist.md").write_text(_checklist(ms, cand, guide, metadata["supplementary_files"], declarations or {}),
-                                      encoding="utf-8")
+    (out / "checklist.md").write_text(_checklist(ms, cand, guide, metadata["supplementary_files"], declarations or {})
+                                      + _ready_section(made, reviewers, guide, declarations), encoding="utf-8")
     return out
+
+
+def make_files(ms: Manuscript, out: Path, guide: dict, llm, author: dict, declarations: dict,
+               authors: list[dict] | None, say) -> dict:
+    """Authors list, title page, anonymised copy, figures, highlights and funders for this journal."""
+    from . import authors as authors_mod
+    from . import config, files
+    from .submit import people
+
+    made: dict = {"files": [], "notes": [], "funders": []}
+    src = Path(ms.path)
+    found = authors if authors is not None else authors_mod.from_manuscript(str(src), ms.front_matter)
+    if not found and authors is None and llm and ms.front_matter:
+        try:
+            found = llm.extract_authors(ms.front_matter)
+        except Exception as e:
+            made["notes"].append(f"Could not read the author list ({e}).")
+    me = {"name": author.get("name", ""), "email": author.get("email", ""), "institution": author.get("affiliation", "")}
+    book_path = config.DATA_DIR / "people.json"
+    team = people.merge_authors(found, me, people.address_book(book_path))
+    people.save(out, "authors.json", team)
+    if found:
+        people.remember(book_path, team)
+    made["authors"] = team
+    say(f"Authors: {', '.join(people.full_name(a) for a in team) or 'none found'}")
+
+    funding = declarations.get("funding", "")
+    if llm and funding:
+        from .submit.assistant import statement_says_no
+
+        if statement_says_no(funding) is False:
+            try:
+                made["funders"] = llm.funders(funding)
+            except Exception:
+                pass
+
+    if team:
+        # Statements written in the manuscript (e.g. acknowledgements) fill what the author didn't give here.
+        files.title_page(out / "title_page.docx", ms.title, team, {**ms.declarations, **declarations}, ms.word_count)
+        made["files"].append("title_page.docx")
+    blind = (guide.get("peer_review") or "").lower().startswith("double")
+    for old in out.glob("anonymised_manuscript.*"):
+        old.unlink()
+    if blind:
+        if src.suffix.lower() == ".docx":
+            removed = files.anonymise(src, out / "anonymised_manuscript.docx", team)
+            made["files"].append("anonymised_manuscript.docx")
+            made["notes"].append("Double-blind review: the anonymised copy is uploaded as the manuscript. Removed: "
+                                 + "; ".join(removed[:8]))
+            say("Made an anonymised manuscript for double-blind review.")
+        else:
+            made["notes"].append("Double-blind review: remove author names and affiliations from the manuscript "
+                                 "yourself (automatic anonymising works on Word files).")
+    fig_dir = out / "figures"
+    if fig_dir.exists():
+        shutil.rmtree(fig_dir)
+    if guide.get("figures_separate") and src.suffix.lower() == ".docx":
+        figs = files.extract_figures(src, fig_dir)
+        if figs:
+            made["files"] += [f"figures/{f.name}" for f in figs]
+            made["notes"].append("Separate figure files: " + "; ".join(files.figure_sizes(figs))
+                                 + ". Print quality is usually at least 300 dpi at the printed size.")
+    for old in ("highlights.txt", "highlights.docx"):
+        (out / old).unlink(missing_ok=True)
+    if guide.get("highlights_required") and llm and ms.abstract:
+        try:
+            bullets = llm.highlights(ms, int(guide.get("highlights_max_chars") or 85))
+        except Exception:
+            bullets = []
+        if bullets:
+            files.highlights_files(out, bullets)
+            made["files"].append("highlights.docx")
+            made["notes"].append("Highlights were written by the AI from your abstract: read them before submitting.")
+    return made
+
+
+def suggest_reviewers(ms: Manuscript, cand: Candidate, team: list[dict], guide: dict, http, say) -> list[dict]:
+    from . import reviewers as reviewers_mod
+    from .http import HttpClient
+
+    queries = (ms.search_queries or [])[:3] or [ms.title]
+    want = max(int(guide.get("suggested_reviewers") or 0), 5)
+    try:
+        found = reviewers_mod.suggest(http or HttpClient(), queries, team, n=want, journal_name=cand.journal.name)
+    except Exception as e:
+        say(f"Could not suggest reviewers ({e}).")
+        return []
+    say(f"Suggested reviewers: {len(found)} (add their emails before submitting).")
+    return found
+
+
+def _ready_section(made: dict, reviewers: list[dict], guide: dict, declarations: dict) -> str:
+    lines = ["", "## Prepared for you"]
+    lines += [f"- {f}" for f in made["files"]] or ["- (no extra files needed)"]
+    lines += [f"- {n}" for n in made["notes"]]
+    todo = []
+    team = made["authors"]
+    if not team:
+        todo.append("Add the authors (none could be read from the manuscript).")
+    for a in team:
+        gaps = [k for k in ("email", "institution", "country") if not a.get(k)]
+        if gaps:
+            todo.append(f"{' '.join(x for x in (a.get('given'), a.get('family')) if x)}: add {', '.join(gaps)}")
+    no_email = [r for r in reviewers if not r.get("email")]
+    if no_email:
+        todo.append(f"Suggested reviewers: add emails for {len(no_email)} (they are typed into the form only "
+                    "with an email). Check each has no conflict of interest with you.")
+    if not declarations.get("ai_disclosure"):
+        todo.append("Use of generative AI: say whether you used AI tools (many journals now ask).")
+    if todo:
+        lines += ["", "## Still needed from you"] + [f"- [ ] {t}" for t in todo]
+    return "\n".join(lines) + "\n"
 
 
 def _write_docx(path: Path, text: str) -> None:

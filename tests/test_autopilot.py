@@ -159,3 +159,118 @@ def test_merge_authors_fills_gaps_from_settings_and_address_book():
     assert [people.full_name(p) for p in out] == ["Irfan Yousuf", "Asha Rao"]
     assert out[0]["corresponding"] and out[0]["email"] == "irfan@x.example"
     assert out[1]["orcid"] == "0000-0002-1825-0097"
+
+
+def test_reviewer_suggestions_skip_authors_their_coauthors_and_weak_records(monkeypatch):
+    from journalfit import reviewers
+
+    def au(aid, name, inst, country="DE", pos="middle"):
+        return {"author": {"id": f"https://openalex.org/{aid}", "display_name": name, "orcid": None},
+                "institutions": [{"display_name": inst}], "countries": [country], "author_position": pos}
+
+    works = [
+        {"id": "W1", "title": "Saving nudges", "publication_year": 2025, "doi": "",
+         "primary_location": {"source": {"display_name": "J Econ", "issn_l": "1234-5678"}},
+         "authorships": [au("A1", "Anna Becker", "Univ Bonn", pos="last"), au("A2", "Carl Diaz", "Univ Bonn")]},
+        {"id": "W2", "title": "Impulse buying", "publication_year": 2024, "doi": "",
+         "primary_location": {"source": {"display_name": "J Psych", "issn_l": "1234-5678"}},
+         "authorships": [au("A3", "Irfan Yousf", "LPU", "IN"), au("A4", "Eve Fox", "Oxford", "GB")]},
+        {"id": "W3", "title": "Peer saving", "publication_year": 2024, "doi": "",
+         "primary_location": {"source": {"display_name": "J Dev", "issn_l": "1234-5678"}},
+         "authorships": [au("A5", "Gita Rao", "LPU", "IN"), au("A6", "Hugo Lind", "Lund", "SE"),
+                         au("A7", "Ian Moe", "Oslo", "NO")]},
+    ]
+
+    class Http:
+        def get_json(self, url, params):
+            if url.endswith("/works"):
+                return {"results": works}
+            return {"results": [{"id": f"https://openalex.org/A{i}", "works_count": 100 if i != 7 else 3,
+                                 "summary_stats": {"h_index": 20}} for i in range(1, 8)]}
+
+    monkeypatch.setattr(reviewers, "_indexed_issns", lambda: {"12345678"})
+    team = [{"given": "Irfan", "family": "Yousf", "institution": "LPU"}]
+    got = [f"{r['given']} {r['family']}" for r in reviewers.suggest(Http(), ["q"], team, n=5)]
+    # Not: the author; Eve Fox (co-author of the author); Gita Rao (author's institution); Ian Moe (3 papers);
+    # Carl Diaz (same institution and paper as Anna Becker, who is picked first).
+    assert got == ["Anna Becker", "Hugo Lind"], got
+
+
+def test_package_has_authors_title_page_blinded_copy_highlights_and_reviewers(tmp_path, monkeypatch):
+    import docx
+
+    from journalfit import manuscript, prepare
+    from journalfit.models import Candidate, Journal
+
+    src = tmp_path / "paper.docx"
+    d = docx.Document()
+    d.add_paragraph("Saving Mechanisms and Peers in Kashmir Households")
+    p = d.add_paragraph("Irfan Yousf")
+    p.add_run("1*").font.superscript = True
+    p.add_run(", Asha Rao")
+    p.add_run("2").font.superscript = True
+    q = d.add_paragraph()
+    q.add_run("1").font.superscript = True
+    q.add_run(" Lovely Professional University, Phagwara, Punjab, India")
+    q = d.add_paragraph()
+    q.add_run("2").font.superscript = True
+    q.add_run(" Department of Economics, University of Delhi, Delhi, India")
+    d.add_paragraph("*Corresponding author: Irfan Yousf, irfan@lpu.example")
+    d.add_paragraph("Abstract")
+    d.add_paragraph("We survey 600 households and find that peers shape saving. " * 3)
+    d.add_paragraph("Keywords: saving; peers")
+    d.add_paragraph("1. Introduction")
+    d.add_paragraph("Our team at Lovely Professional University ran the survey.")
+    d.add_paragraph("Acknowledgements")
+    d.add_paragraph("We thank Prof. X of the University of Delhi.")
+    d.add_paragraph("References")
+    d.add_paragraph("Yousf, I. (2024). Earlier work. Journal of Saving, 1, 1-2.")
+    d.core_properties.author = "Irfan Yousf"
+    d.save(str(src))
+    ms = manuscript.parse(src)
+
+    class LLM:
+        has_web = True
+
+        def guidelines(self, ms, j, page=""):
+            return {"peer_review": "double-blind", "highlights_required": True, "figures_separate": False,
+                    "submission_url": "https://x.example/submit"}
+
+        def cover_letter(self, *a, **k):
+            return "Dear Editor"
+
+        def highlights(self, ms, max_chars=85):
+            return ["Peers shape household saving in Kashmir", "A survey of 600 households"]
+
+        def funders(self, statement):
+            return [{"name": "Indian Council of Social Science Research", "award": "ICSSR-123"}]
+
+    monkeypatch.setattr(prepare, "suggest_reviewers", lambda *a: [
+        {"given": "Anna", "family": "Becker", "email": "", "institution": "Bonn", "reason": "Saving nudges"}])
+    cand = Candidate(journal=Journal(openalex_id="S1", name="Journal of Saving"))
+    out = prepare.build_package(ms, cand, LLM(), {"name": "Irfan Yousf", "email": "irfan@lpu.example"}, tmp_path / "out",
+                                declarations={"funding": "Funded by the Indian Council of Social Science Research "
+                                                         "(ICSSR-123).", "competing_interests": "None."})
+    team = json.loads((out / "authors.json").read_text())
+    assert [(a["given"], a["family"]) for a in team] == [("Irfan", "Yousf"), ("Asha", "Rao")]
+    assert team[0]["corresponding"] and team[0]["email"] == "irfan@lpu.example"
+    assert team[1]["department"] == "Department of Economics" and team[1]["institution"] == "University of Delhi"
+    blinded = docx.Document(str(out / "anonymised_manuscript.docx"))
+    text = "\n".join(p.text for p in blinded.paragraphs)
+    body = text.split("References")[0]
+    assert "Yousf" not in body and "Lovely Professional" not in body and "Asha" not in body
+    assert "Acknowledgements" not in body and "Prof. X" not in body
+    assert "Yousf, I. (2024)" in text  # references are left as they are
+    assert blinded.core_properties.author == ""
+    title_page = "\n".join(p.text for p in docx.Document(str(out / "title_page.docx")).paragraphs)
+    assert "Irfan Yousf" in title_page and "University of Delhi" in title_page and "We thank" in title_page
+    assert (out / "highlights.txt").read_text().startswith("Peers shape")
+    plan, meta = assistant.load_plan(out)
+    assert plan.files["manuscript_file"].endswith("anonymised_manuscript.docx")
+    assert plan.files["title_page_file"].endswith("title_page.docx")
+    assert plan.values["funder_name"] == "Indian Council of Social Science Research"
+    assert plan.values["grant_number"] == "ICSSR-123"
+    assert plan.people["reviewer"] == []  # no email yet, so never typed into a form
+    checklist = (out / "checklist.md").read_text()
+    assert "add emails for 1" in checklist and "Use of generative AI" in checklist
+    assert json.loads((tmp_path / "out" / "journal-of-saving" / "authors.json").read_text())

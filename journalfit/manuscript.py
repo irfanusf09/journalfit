@@ -91,10 +91,12 @@ def parse(path: str | Path) -> Manuscript:
         return ms
 
     # Title: first reasonably long line that isn't a label like "Original article".
-    for line in lines[:15]:
+    title_at = -1
+    for i, line in enumerate(lines[:15]):
         if 15 <= len(line) <= 300 and not HEADING_ABSTRACT_RE.match(line) \
                 and not re.match(r"^(original|research|review)\s+(article|paper)$", line, re.I):
             ms.title = line.rstrip(".")
+            title_at = i
             break
 
     # Abstract: paragraph(s) after an "Abstract" heading until the next section.
@@ -113,6 +115,8 @@ def parse(path: str | Path) -> Manuscript:
                 if sum(len(p) for p in parts) > 3000:
                     break
             ms.abstract = " ".join(p for p in parts if p).strip()
+            if 0 <= title_at < i:
+                ms.front_matter = "\n".join(lines[title_at + 1:i])[:4000]
             break
 
     for line in lines[:ref_start]:
@@ -159,6 +163,10 @@ DECLARATION_HEADINGS = {
     "author_contributions": r"authors?'?\s+contributions?|credit\s+(authorship\s+)?(contribution\s+)?statement|"
                             r"contributions?\s+of\s+the\s+authors",
     "preprint": r"preprint(\s+statement)?",
+    "acknowledgements": r"acknowledge?ments?",
+    "ai_disclosure": r"(declaration\s+of\s+)?(the\s+)?(use\s+of\s+)?(generative\s+)?(ai|artificial\s+intelligence)"
+                     r"(\s+and\s+ai[\s-]+assisted\s+technologies)?(\s+(use|tools?|disclosure|statement|declaration))?(\s+in\s+"
+                     r"(the\s+)?(writing|preparation)(\s+process)?)?|declaration\s+of\s+generative\s+ai.*",
 }
 
 
@@ -173,17 +181,21 @@ def extract_declarations(lines: list[str]) -> dict:
             text = " ".join(buf).strip()
             if len(text) >= 2 and current not in found:
                 found[current] = text[:800]
+            elif len(text) >= 2 and text not in found[current]:  # e.g. "Informed consent" and "Ethics approval"
+                found[current] = (found[current] + " " + text)[:1200]
 
     for line in lines:
-        # "Funding: None." or a heading line on its own ("Conflict of interest").
-        head, rest = (line.split(":", 1) if ":" in line[:80] else (line, ""))
-        head = re.sub(r"^\s*\d+(\.\d+)*\.?\s*", "", head).strip(" .-–—*")
-        key = None
-        if len(head) <= 80:
-            for k, rx in DECLARATION_HEADINGS.items():
-                if re.fullmatch(rx, head, re.I):
-                    key = k
-                    break
+        # "Funding: None.", "Funding. None." or a heading line on its own ("Conflict of interest").
+        key, rest = None, ""
+        splits = [line.split(":", 1)] if ":" in line[:80] else []
+        splits += [[line[:m.start()], line[m.end():]] for m in re.finditer(r"\.\s+", line[:81])][:3]
+        for head, tail in splits + [[line, ""]]:
+            head = re.sub(r"^\s*\d+(\.\d+)*\.?\s*", "", head).strip(" .-–—*")
+            if len(head) <= 80:
+                key = next((k for k, rx in DECLARATION_HEADINGS.items() if re.fullmatch(rx, head, re.I)), None)
+            if key:
+                rest = tail
+                break
         if key:
             close()
             current, buf = key, ([rest.strip()] if rest.strip() else [])

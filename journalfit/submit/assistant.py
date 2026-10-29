@@ -348,7 +348,28 @@ def answer_question(bits: list[str], options: list[str], values: dict[str, str])
         return None
     if keys[0] == "ethics" and re.search(r"not\s+applicable", statement, re.I) and len(na) == 1:
         return na[0]
-    return no[0] if NEGATIVE.search(statement) else yes[0]
+    verdict = statement_says_no(statement)
+    return None if verdict is None else no[0] if verdict else yes[0]
+
+
+POSITIVE = re.compile(r"\b(used|use[ds]?|employed|utili[sz]ed|assisted|with\s+the\s+help|received|receive|funded|"
+                      r"supported|granted|obtained|approved|posted|submitted|declares?\s+that\s+\w+\s+(has|have)|"
+                      r"has\s+received|is\s+an?\s+(employee|consultant|shareholder))\b", re.I)
+NEGATED = re.compile(r"\b(not|never|no|nor)\s+(\w+\s+){0,4}(used|use|employed|utili[sz]ed|received|receive|funded|"
+                     r"supported|granted|posted|submitted|obtained)\b|\b(used|received|receive|posted|submitted)\s+"
+                     r"(\w+\s+){0,2}(no|any)\b", re.I)
+
+
+def statement_says_no(statement: str) -> bool | None:
+    """True for 'none / did not', False for a positive statement, None when it isn't clear."""
+    neg, pos = bool(NEGATIVE.search(statement)), bool(POSITIVE.search(statement))
+    if neg and not pos:
+        return True
+    if pos and not neg:
+        return False
+    if neg and pos and NEGATED.search(statement):
+        return True
+    return None if neg and pos else None
 
 
 BAD_TYPES = re.compile(r"review|letter|editorial|comment|short|brief|erratum|correction|book|perspective|case", re.I)

@@ -56,7 +56,10 @@ DECLARATION_FIELDS = {
     "data_availability": "Data availability",
     "ethics": "Ethics approval / consent",
     "preprint": "Preprint",
+    "previous_submission": "Previous submission",
+    "ai_disclosure": "Use of generative AI",
     "author_contributions": "Author contributions",
+    "acknowledgements": "Acknowledgements",
 }
 
 
@@ -70,9 +73,11 @@ DEFAULT_DECLARATIONS = {
                          "corresponding author upon reasonable request.",
     "ethics": "Not applicable. This study does not involve human participants or animals.",
     "preprint": "This manuscript has not been posted on a preprint server.",
+    "previous_submission": "This manuscript has not been submitted to this journal before.",
     "author_contributions": "All authors contributed to the study conception and design, analysis and "
                             "writing, and read and approved the final manuscript.",
 }
+# No standard wording for AI use or acknowledgements: only the author can say.
 
 
 def declarations(s: dict | None = None) -> dict:

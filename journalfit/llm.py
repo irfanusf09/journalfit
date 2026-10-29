@@ -143,7 +143,10 @@ GUIDE_JSON = ('{"guidelines_url": str, "submission_system": "ScholarOne|Editoria
               '"required_items": [str], '
               '"issues": [{"item": str, "manuscript": str, "requirement": str}], '
               '"minor_issues": [{"item": str, "manuscript": str, "requirement": str}], '
-              '"can_wait": [str], "article_type_accepted": bool|null}')
+              '"can_wait": [str], "article_type_accepted": bool|null, '
+              '"peer_review": "double-blind|single-blind|open|unknown", "title_page_separate": bool|null, '
+              '"highlights_required": bool|null, "highlights_max_chars": int|null, '
+              '"figures_separate": bool|null, "suggested_reviewers": int|null}')
 GUIDE_RULES = (
     "Sort everything by whether it matters at FIRST submission:\n"
     "- required_items: only what the submission system or editor needs now, without which the paper "
@@ -157,6 +160,11 @@ GUIDE_RULES = (
     "heading levels, figure file formats and resolution, slightly over a limit.\n"
     "- format_free_first_submission: true if the guidelines say any reasonable format/reference style is "
     "accepted for the first submission (e.g. 'Your Paper Your Way', 'format-free submission').\n"
+    "- peer_review: the review model the guidelines state; title_page_separate: true if a separate title page "
+    "file is asked for at submission; highlights_required: true only if highlights are mandatory at submission; "
+    "figures_separate: true only if figures must be uploaded as separate files at first submission (false if "
+    "they may stay in the manuscript); suggested_reviewers: how many reviewers authors must or may suggest "
+    "(null if not mentioned).\n"
     "Be brief; don't list routine things every journal asks for after acceptance.")
 
 
@@ -310,6 +318,42 @@ class LLM:
             + "Using only these guidelines. " + tail.replace("End your reply with a fenced json block:", "Return JSON:"),
             _guide_schema())))
 
+    def highlights(self, ms: Manuscript, max_chars: int = 85) -> list[str]:
+        """3-5 highlights taken only from the abstract (no new claims)."""
+        prompt = (f"Title: {ms.title}\nAbstract: {ms.abstract}\n\n"
+                  f"Write 3 to 5 highlights for this paper: each one sentence of at most {max_chars} characters "
+                  "including spaces, stating a finding or contribution given in the abstract. Use only what the "
+                  "abstract says: no new numbers, claims or methods. No full stop needed at the end.")
+        out = self.structured("You are an experienced academic editor.", prompt, HIGHLIGHTS_SCHEMA, effort="low")
+        return [h.strip() for h in out.get("highlights") or [] if h.strip() and len(h.strip()) <= max_chars][:5]
+
+    def funders(self, statement: str) -> list[dict]:
+        """Funding bodies and grant numbers named in the funding statement (none if it names none)."""
+        prompt = (f"Funding statement: {statement}\n\nList each funding organisation named in it with its grant or "
+                  "award number exactly as written (empty string if none is given). Return an empty list if the "
+                  "statement says there was no funding. Never add an organisation that is not named.")
+        out = self.structured("You extract facts exactly as written.", prompt, FUNDERS_SCHEMA, effort="low")
+        return [f for f in out.get("funders") or [] if f.get("name") and f["name"].lower() in statement.lower()]
+
+    def extract_authors(self, front_matter: str) -> list[dict]:
+        """Authors from the title block, exactly as written (empty strings for what isn't given)."""
+        prompt = (f"<title_block>\n{front_matter[:4000]}\n</title_block>\n\nList the authors in order with the "
+                  "details written for each (affiliation split into department, institution, city, state, "
+                  "country). Use empty strings for anything not written. Mark the corresponding author.")
+        out = self.structured("You extract facts exactly as written. You never invent details.", prompt,
+                              AUTHORS_SCHEMA, effort="low")
+        low = front_matter.lower()
+        # Keep only people really named in the text, and emails/ORCIDs really written there.
+        keep = []
+        for a in out.get("authors") or []:
+            if not a.get("family") or a["family"].lower() not in low:
+                continue
+            for k in ("email", "orcid"):
+                if a.get(k) and a[k].lower() not in low:
+                    a[k] = ""
+            keep.append(a)
+        return keep
+
     def cover_letter(self, ms: Manuscript, j: Journal, author: dict, scope_reason: str = "",
                      requirements: list[str] | None = None, declarations: dict | None = None) -> str:
         needs = [r for r in requirements or [] if re.search(r"cover letter|preprint|declar|statement", r, re.I)]
@@ -335,6 +379,31 @@ class LLM:
         )
         return self.structured("You write concise, professional academic correspondence.",
                                prompt, LETTER_SCHEMA)["letter"]
+
+
+HIGHLIGHTS_SCHEMA = {
+    "type": "object", "properties": {"highlights": {"type": "array", "items": {"type": "string"}}},
+    "required": ["highlights"], "additionalProperties": False,
+}
+FUNDERS_SCHEMA = {
+    "type": "object",
+    "properties": {"funders": {"type": "array", "items": {
+        "type": "object", "properties": {"name": {"type": "string"}, "award": {"type": "string"}},
+        "required": ["name", "award"], "additionalProperties": False}}},
+    "required": ["funders"], "additionalProperties": False,
+}
+AUTHORS_SCHEMA = {
+    "type": "object",
+    "properties": {"authors": {"type": "array", "items": {
+        "type": "object",
+        "properties": {k: {"type": "string"} for k in ("given", "family", "email", "orcid", "department",
+                                                         "institution", "city", "state", "country")}
+        | {"corresponding": {"type": "boolean"}},
+        "required": ["given", "family", "email", "orcid", "department", "institution", "city", "state",
+                     "country", "corresponding"],
+        "additionalProperties": False}}},
+    "required": ["authors"], "additionalProperties": False,
+}
 
 
 def _nullable(t: str) -> dict:
@@ -366,6 +435,12 @@ def _guide_schema() -> dict:
         "minor_issues": _issue_list(),
         "can_wait": {"type": "array", "items": {"type": "string"}},
         "article_type_accepted": _nullable("boolean"),
+        "peer_review": _nullable("string"),  # nullable: an answer without it is still usable
+        "title_page_separate": _nullable("boolean"),
+        "highlights_required": _nullable("boolean"),
+        "highlights_max_chars": _nullable("integer"),
+        "figures_separate": _nullable("boolean"),
+        "suggested_reviewers": _nullable("integer"),
     }
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
