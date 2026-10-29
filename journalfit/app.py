@@ -181,7 +181,7 @@ def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], dec
         before = claude.cost.usd
     pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"], supplements=supplements,
                         declarations=_clean_declarations(declarations) if declarations is not None
-                        else settings_mod.declarations())
+                        else settings_mod.declarations(), log=job.say)
     meta = json.loads((pkg / "metadata.json").read_text())
     cover = pkg / "cover_letter.txt"
     job.say("Package ready.")
@@ -196,7 +196,27 @@ def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], dec
         "submission_url_found": bool(meta.get("submission_url")),
         "files": sorted(p.name for p in pkg.iterdir()),
         "supplementary": meta.get("supplementary_files", []),
+        "authors": json.loads((pkg / "authors.json").read_text()) if (pkg / "authors.json").exists() else [],
+        "reviewers": json.loads((pkg / "reviewers.json").read_text()) if (pkg / "reviewers.json").exists() else [],
     }
+
+
+def save_people(body: dict) -> dict:
+    """The author's corrections to the authors and suggested reviewers of a package."""
+    from .submit import people
+
+    pkg = Path(body.get("package", "")).resolve()
+    if OUTPUT_DIR.resolve() not in pkg.parents or not (pkg / "metadata.json").exists():
+        raise ValueError("Unknown submission package.")
+    authors = [a for a in body.get("authors") or [] if isinstance(a, dict) and (a.get("given") or a.get("family"))]
+    reviewers = [r for r in body.get("reviewers") or [] if isinstance(r, dict)]
+    people.save(pkg, "authors.json", authors)
+    # Unticked reviewers are kept in the list (with their papers) but never entered.
+    kept = [dict(people.normalise(r), reason=str(r.get("reason") or ""), include=bool(r.get("include", True)),
+                 papers=r.get("papers") or [], h_index=r.get("h_index")) for r in reviewers]
+    (pkg / "reviewers.json").write_text(json.dumps(kept, indent=2, ensure_ascii=False), encoding="utf-8")
+    people.remember(config.DATA_DIR / "people.json", authors)
+    return {"authors": len(authors), "reviewers": sum(1 for r in kept if r["include"] and r["email"])}
 
 
 def _clean_declarations(d: dict) -> dict:
@@ -443,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("unknown provider")
                 if isinstance(body.get("declarations"), dict):
                     s["declarations"] = _clean_declarations(body["declarations"])
-                for k in ("provider", "author_name", "author_affiliation", "author_email"):
+                for k in ("provider", "author_name", "author_affiliation", "author_email", "author_country", "author_orcid"):
                     if k in body:
                         s[k] = str(body[k]).strip()
                 if "model" in body:
@@ -482,6 +502,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/assist/auto":
                 ASSISTANT.auto = bool(body.get("on"))
                 return self._json({"ok": True})
+            if u.path == "/api/people":
+                return self._json(save_people(body))
             if u.path == "/api/assist/resume":
                 if not ASSISTANT.active:
                     raise ValueError("Open the submission website first.")

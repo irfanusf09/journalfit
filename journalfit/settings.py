@@ -47,7 +47,7 @@ def keys(s: dict | None = None) -> dict[str, str]:
 
 def author(s: dict | None = None) -> dict:
     s = s if s is not None else load()
-    return {k: s[f"author_{k}"] for k in ("name", "email", "affiliation") if s.get(f"author_{k}")}
+    return {k: s[f"author_{k}"] for k in ("name", "email", "affiliation", "country", "orcid") if s.get(f"author_{k}")}
 
 
 DECLARATION_FIELDS = {

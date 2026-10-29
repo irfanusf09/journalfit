@@ -185,9 +185,10 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
     ("cover_letter_file", re.compile(r"cover[\s_-]*letter", re.I)),
-    ("title_page_file", re.compile(r"title[\s_-]*page", re.I)),
-    ("highlights_file", re.compile(r"highlights", re.I)),
-    ("figure_file", re.compile(r"\bfig(ure)?s?\b", re.I)),
+    # A box that also says "manuscript" is the manuscript box ("Manuscript (with figures)").
+    ("title_page_file", re.compile(r"^(?!.*manuscript).*title[\s_-]*page", re.I)),
+    ("highlights_file", re.compile(r"^(?!.*manuscript).*highlights", re.I)),
+    ("figure_file", re.compile(r"^(?!.*manuscript).*\bfig(ure)?s?\b", re.I)),
     ("supplementary_file", re.compile(r"supplement|supporting[\s_-]*(info|material|file)|additional[\s_-]*file|"
                                       r"appendi(x|ces)|electronic[\s_-]*supplementary|\bESM\b|\bSI\b", re.I)),
     ("manuscript_file", re.compile(r"manuscript|main[\s_-]*(document|file)|article file|upload|file", re.I)),
@@ -268,7 +269,8 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
 
     persons = {"author": people_mod.load(package_dir, "authors.json"),
                # A suggested reviewer goes in only with an email: sites need it, and it is never guessed.
-               "reviewer": [p for p in people_mod.load(package_dir, "reviewers.json") if p.get("email")]}
+               "reviewer": [p for p in people_mod.load(package_dir, "reviewers.json")
+                            if p.get("email") and p.get("include", True)]}
     return Plan(values, {k: v for k, v in files.items() if v}, supplements, people=persons, figures=figures), meta
 
 
@@ -820,7 +822,7 @@ def write_report(package_dir: Path, url: str, lines: list[str]) -> None:
         f.write(f"\n== {dt.datetime.now():%H:%M:%S} {url}\n" + "\n".join(lines) + "\n")
 
 
-def run(package_dir: Path, url: str | None = None) -> None:
+def run(package_dir: Path, url: str | None = None, autopilot: bool = True) -> None:
     from playwright.sync_api import sync_playwright
 
     plan, meta = load_plan(package_dir)
@@ -830,24 +832,33 @@ def run(package_dir: Path, url: str | None = None) -> None:
     config.ensure_data_dir()
     print(f"\nJournal: {meta['journal']}\nPortal:  {url}")
     print("A browser window opens. Log in if asked and start a new submission.\n"
-          "On each form page come back here and press Enter to autofill it.\n"
-          "This tool never clicks buttons. You check every page and click Submit yourself.\n")
+          + ("Each page is then filled and the tool moves to the next step by itself. It pauses when it needs "
+             "you and stops at the review page.\n" if autopilot else "Each page is filled when it appears; you "
+             "press Next.\n")
+          + "The tool never presses Submit. Press Ctrl+C here to close the browser.\n")
+    driver = Driver(package_dir, plan, log=print, autopilot=autopilot)
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(str(config.BROWSER_PROFILE), headless=False,
                                                     accept_downloads=False)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(url)
-        uploaded: set[str] = set()  # never upload the same file twice in one session
-        while True:
-            cmd = input("[Enter] autofill current page   [q] quit > ").strip().lower()
-            if cmd == "q":
-                break
-            page = ctx.pages[-1]  # portals sometimes open the form in a new tab
-            n = fill_page(page, plan, uploaded=uploaded)
-            print(f"  {n} field(s) filled on this page." if n else "  Nothing to fill on this page.")
+        try:
+            while True:
+                page = ctx.pages[-1]  # portals sometimes open the form in a new tab
+                try:
+                    driver.tick(page)
+                except Exception as e:
+                    if "closed" in str(e).lower():
+                        break
+                page.wait_for_timeout(1500)
+        except KeyboardInterrupt:
+            pass
         ctx.close()
+    score = automation_score(package_dir)
+    if score["percent"] is not None:
+        print(f"The tool filled {score['percent']}% of the boxes ({score['filled']} filled, "
+              f"{score['left_for_you']} left for you).")
     print("Browser closed. If you did not click Submit, nothing was submitted.")
-
 
 class Driver:
     """Watches the browser tab: fills each new form page once it has settled and, with the

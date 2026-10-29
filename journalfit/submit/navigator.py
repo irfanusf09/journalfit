@@ -191,10 +191,28 @@ def has_password_box(page) -> bool:
     return False
 
 
+MODAL_JS = """() => [...document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], '
+  + '.modal.show, .modal.in, .modal[style*="display: block"], .ui-dialog, .MuiDialog-root, .popup.open')]
+  .some(e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+               return r.width > 40 && r.height > 40 && s.visibility !== 'hidden' && s.display !== 'none'; })"""
+
+
+def has_modal(page) -> bool:
+    for frame in page.frames:
+        try:
+            if frame.evaluate(MODAL_JS):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def stop_reason(page) -> str | None:
     """Why the autopilot must hand over on this page, or None to carry on."""
     if has_password_box(page):
         return "login"
+    if has_modal(page):
+        return "popup"  # its own Save/OK belongs to the author; Next behind it would lose what is typed
     labels = " | ".join(_label(b) for _, b in buttons(page))
     if REVIEW_PAGE.search(labels) or REVIEW_PAGE.search(page_text(page)[:4000]):
         if find(page, "next") is None:
@@ -236,6 +254,9 @@ class Autopilot:
         why = stop_reason(page)
         if why == "login":
             return self._pause(sig, "log in to the site (the tool never types passwords). It carries on after that.")
+        if why == "popup":
+            return self._pause(sig, "a pop-up window is open. Check it and press its own Save/Add/OK button "
+                                    "yourself; the tool carries on when it closes.")
         if why == "review":
             return self._pause(sig, "this is the review / approval page. Check the PDF and every detail, "
                                     "then click Submit yourself. The tool never submits.")

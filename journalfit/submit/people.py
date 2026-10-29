@@ -108,6 +108,8 @@ def normalise(p: dict) -> dict:
     out["corresponding"] = bool(p.get("corresponding"))
     if p.get("reason"):
         out["reason"] = str(p["reason"]).strip()
+    if p.get("include") is False:
+        out["include"] = False
     if out["orcid"]:
         m = re.search(r"(\d{4}-?\d{4}-?\d{4}-?\d{3}[\dX])", out["orcid"].upper())
         out["orcid"] = _format_orcid(m.group(1)) if m and orcid_ok(m.group(1)) else ""

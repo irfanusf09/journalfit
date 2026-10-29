@@ -8,14 +8,15 @@ commands.
 ## What JournalFit is
 
 A tool that takes a manuscript, finds the best-fitting journals across all publishers,
-checks journal metrics against the user's rules, prepares a submission package and fills
-in the journal's submission website. The user always clicks the final Submit button; the
-tool never clicks buttons on submission sites.
+checks journal metrics against the user's rules, prepares a submission package (authors,
+title page, anonymised copy, figures, highlights, suggested reviewers) and fills in the
+journal's submission website step by step (autopilot). The user always clicks the final
+Submit button; the tool only presses Next/Continue and Add author/reviewer buttons.
 
 - Point-and-click app: `journalfit app` (local web page at http://127.0.0.1:8765, started
   by the `JournalFit.command` icon on the Desktop; create it with `journalfit app --shortcut`).
 - Command line: `journalfit find|prepare|submit|assist|data` (see README.md).
-- Tests: `pip install -e '.[dev,browser]' && pytest` (46 tests, all passing at handoff).
+- Tests: `pip install -e '.[dev,browser]' && pytest` (all passing at handoff).
 
 ## Owner's setup
 
@@ -49,7 +50,13 @@ tool never clicks buttons on submission sites.
 - `finder.py` runs the pipeline: AI lookups for the top N journals (20 for DeepSeek),
   a 90-day cache of real findings, a scope review of every finalist, and diagnostics.
 - `prepare.py` builds the package (checklist, cover letter, supplementary files).
-- `submit/assistant.py` fills forms and uploads files; it never clicks buttons. It handles
+- `submit/navigator.py`: the autopilot. `FORBIDDEN` (submit, approve, build PDF, agree, pay, delete,
+  ...) always wins over `NEXT`/`ADD_PERSON`; it stops at the review page and pauses with a reason.
+- `submit/people.py`: author/reviewer records and how person boxes are matched (one block per person).
+- `authors.py` reads the title block; `files.py` makes the title page, anonymised copy, figures and
+  highlights; `reviewers.py` suggests reviewers from OpenAlex.
+- `submit/assistant.py` fills forms and uploads files; `Driver` is the page-watching loop shared by the
+  app, the CLI and the tests. It handles
   item-type uploads (Editorial Manager, ScholarOne), rich-text editors, lists, option groups
   and tick boxes. Standard confirmations are ticked only if the author switched them on.
 - `submit/ai_mapper.py`: the AI reads each form page and says which prepared item goes in which
@@ -64,7 +71,11 @@ tool never clicks buttons on submission sites.
   spoofing, fetching blocked pages through mirrors, CDNs or archives). The user agent is
   honest (`JournalFit/0.1`).
 - Never guess metrics: unknown stays "not published", and every number records its source.
-- Never auto-submit.
+- Never auto-submit. The autopilot may press only Next/Continue and Add author/reviewer buttons
+  (agreed 2026-10-30); it stops at the review/approval page.
+- Person boxes are filled only from the author's own records (authors.json, reviewers.json), never guessed.
+- Tests never touch the real ~/.journalfit (tests/conftest.py).
+- tests/portal is a 6-step practice submission site; test_autopilot.py drives it end to end.
 
 ## State at handoff and next steps
 

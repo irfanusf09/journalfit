@@ -168,8 +168,10 @@ def cmd_prepare(a, ms=None, cand=None, claude=None):
     from . import settings
 
     out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path), supplements=supplements,
-                        declarations=settings.declarations())
-    console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · metadata.json · manuscript copy")
+                        declarations={**ms.declarations, **settings.declarations()}, log=console.print)
+    console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · title_page.docx · authors.json · "
+                  "reviewers.json · metadata.json · manuscript copy\n  Check authors.json, and add emails to "
+                  "reviewers.json for the reviewers you want to suggest.")
     console.print((out / "checklist.md").read_text())
     _cost(claude)
     return out
@@ -201,19 +203,19 @@ def cmd_submit(a):
     if not a.yes and input("Prepare and open the submission for this journal? [y/N] ").strip().lower() != "y":
         raise SystemExit("Stopped. Nothing was submitted.")
     out = cmd_prepare(a, ms=ms, cand=cand, claude=claude)
-    _assist(out, a.url)
+    _assist(out, a.url, not getattr(a, "no_autopilot", False))
 
 
-def _assist(package: Path, url: str | None):
+def _assist(package: Path, url: str | None, autopilot: bool = True):
     try:
         from .submit.assistant import run
     except ImportError:
         raise SystemExit("Install the browser extra first: pip install 'journalfit[browser]' && playwright install chromium")
-    run(package, url)
+    run(package, url, autopilot=autopilot)
 
 
 def cmd_assist(a):
-    _assist(Path(a.package), a.url)
+    _assist(Path(a.package), a.url, not a.no_autopilot)
 
 
 def cmd_data(a):
@@ -300,6 +302,7 @@ def main(argv=None):
     s = sub.add_parser("assist", help="reopen the browser assistant for a prepared package")
     s.add_argument("package")
     s.add_argument("--url")
+    s.add_argument("--no-autopilot", action="store_true", help="fill pages only; press Next yourself")
     s.set_defaults(fn=cmd_assist)
 
     ap = sub.add_parser("app", help="open the point-and-click app in your browser")

@@ -274,3 +274,33 @@ def test_package_has_authors_title_page_blinded_copy_highlights_and_reviewers(tm
     checklist = (out / "checklist.md").read_text()
     assert "add emails for 1" in checklist and "Use of generative AI" in checklist
     assert json.loads((tmp_path / "out" / "journal-of-saving" / "authors.json").read_text())
+
+
+def test_upload_box_that_says_manuscript_gets_the_manuscript():
+    assert assistant.match_field("Upload manuscript (figures embedded)", True) == "manuscript_file"
+    assert assistant.match_field("Figures", True) == "figure_file"
+    assert assistant.match_field("Title page (with author details)", True) == "title_page_file"
+
+
+def test_autopilot_pauses_on_an_open_popup(tmp_path, monkeypatch):
+    from playwright.sync_api import sync_playwright
+
+    pkg = make_package(tmp_path)
+    plan, _ = assistant.load_plan(pkg)
+    logs: list[str] = []
+    driver = assistant.Driver(pkg, plan, log=logs.append)
+    html = ('<label for="t">Title</label><input id="t" name="t">'
+            '<button onclick="window.pressedNext = 1">Next</button>'
+            '<div role="dialog" style="width:300px;height:200px"><label for="g">First Name</label>'
+            '<input id="g"><button>Save</button></div>')
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(html)
+        statuses = []
+        for _ in range(4):
+            statuses.append(driver.tick(page))
+            page.wait_for_timeout(100)
+        assert "paused" in statuses and any("pop-up window is open" in line for line in logs), logs
+        assert page.evaluate("window.pressedNext") is None
+        b.close()

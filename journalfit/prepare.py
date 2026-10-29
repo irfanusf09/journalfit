@@ -98,7 +98,8 @@ def make_files(ms: Manuscript, out: Path, guide: dict, llm, author: dict, declar
             found = llm.extract_authors(ms.front_matter)
         except Exception as e:
             made["notes"].append(f"Could not read the author list ({e}).")
-    me = {"name": author.get("name", ""), "email": author.get("email", ""), "institution": author.get("affiliation", "")}
+    me = {"name": author.get("name", ""), "email": author.get("email", ""), "institution": author.get("affiliation", ""),
+          "country": author.get("country", ""), "orcid": author.get("orcid", "")}
     book_path = config.DATA_DIR / "people.json"
     team = people.merge_authors(found, me, people.address_book(book_path))
     people.save(out, "authors.json", team)

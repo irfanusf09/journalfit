@@ -18,15 +18,32 @@ Give it a manuscript. It finds the journals that fit best (from any publisher), 
 5. **Applies your metric limits** (`--max-first-decision`, `--min-acceptance`). Journals that don't publish a metric are kept and flagged, or skipped with `--if-missing skip`.
 6. **Scope review.** Claude rates the finalists 0–10 the way an editor would. Likely desk rejections drop down the ranking.
 7. **Ranks the journals and writes `shortlist.md` and `shortlist.json`**, with reasons, metrics and sources for each one.
-8. **Prepares the package** for the journal you pick:
-   - reads the journal's author guidelines;
-   - writes `checklist.md` with mismatches to fix (word limit, abstract length and so on) and the items required at submission;
-   - drafts a cover letter (`.docx` and `.txt`);
-   - writes `metadata.json` for the forms.
-9. **Submission assistant.** It opens a real browser with a saved profile, so you log in yourself once (works with 2FA, CAPTCHA and university login). On each form page you press Enter in the terminal and it fills in the title, running title, abstract and keywords and uploads the manuscript and cover letter, matching fields by their labels. It works on ScholarOne, Editorial Manager, Elsevier, Snapp, MDPI, OJS and others, including forms inside frames.
-   - It never overwrites a field that already has a value.
-   - It never fills author or person-detail fields.
-   - It **never clicks any button**, so it cannot submit anything. You move between pages and click Submit yourself.
+8. **Prepares the package** for the journal you pick, the way a careful author would:
+   - reads the journal's author guidelines (review model, title page, highlights, separate figures, how many reviewers to suggest);
+   - reads the **author list** from the manuscript's title block: names, affiliations split into department, institution, city and country, emails, ORCID iDs and the corresponding author. Co-authors are remembered for next time (`~/.journalfit/people.json`);
+   - writes a **title page** with the authors and declarations;
+   - for **double-blind** journals, makes an **anonymised manuscript**: the author block, acknowledgements, funding and contributions are removed, names, emails and institutions in the text are replaced by [blinded], and the Word file's author properties are cleared. References are left unchanged;
+   - saves **separate figure files** from the Word file when the journal wants them, with their pixel size;
+   - drafts **highlights** from the abstract when the journal requires them (for you to check);
+   - finds the **funders and grant numbers** in your funding statement;
+   - **suggests reviewers**: authors of the closest recent papers in Scopus journals with an established record (at least 15 papers, h-index 6 or more). Your own institutions, your co-authors and their co-authors are excluded, with at most one per institution and a spread over countries. OpenAlex has no email addresses, so you add an email for each reviewer you want to suggest;
+   - writes `checklist.md` (must-do items, what was prepared, what is still needed from you), a cover letter (`.docx` and `.txt`) and `metadata.json`.
+
+   Statements written in the manuscript are read whether they look like `Funding: ...` or `Funding. ...`. That includes the use of generative AI, acknowledgements and previous submission.
+9. **Submission autopilot.** It opens a real browser with a saved profile, so you log in yourself once (works with 2FA, CAPTCHA and university login). From then on, each page is filled and the tool moves to the next step by itself:
+   - it fills the title, running title, abstract, keywords and article type;
+   - it adds **every author** (pressing *Add author* when more are needed) and the **suggested reviewers** that have an email;
+   - it fills the statements, word, figure and table counts, funder and grant number, and highlights;
+   - it answers **Yes/No questions** your statements settle clearly (submitted before? funding? competing interests?);
+   - it uploads the manuscript (the anonymised copy for double-blind journals), title page, cover letter, highlights, figures and supplementary files, each with its own item type.
+
+   It works on ScholarOne, Editorial Manager, Elsevier, Snapp, MDPI, OJS and others, including forms inside frames. Safety rules:
+   - It only presses **Next/Continue** and **Add author/reviewer** buttons. Any button whose wording mentions submit, approve, build PDF, agree, accept, pay, delete, withdraw, transfer, cancel, back and similar is never pressed. Neither is a link to another site.
+   - It **pauses and says why** when the site wants a login, a required box only you can fill is empty, the site shows an error, or it can't tell which button is Next. Fix it, then click **Resume** (or press Next yourself).
+   - It **stops at the review / approval page**. You check the PDF and click Submit yourself.
+   - It never overwrites a box that already has a value, and it never puts manuscript text in a person box or person details anywhere else.
+   - Opposed-reviewer boxes, newsletters, transfer offers and other tick boxes are left alone.
+   - Each submission gets `automation.json`, which records the share of boxes the tool filled (shown in the app as "Done by the tool so far").
 
 ## Install
 
@@ -93,7 +110,7 @@ journalfit find paper.docx --publisher springer,elsevier --no-oa --scopus
 # 2. Build the package for one of them (rank number or name)
 journalfit prepare paper.docx --pick 2
 
-# 3. Open the browser assistant for that package
+# 3. Open the submission autopilot for that package (--no-autopilot to press Next yourself)
 journalfit assist submissions/paper/<journal>
 
 # Or do it all in one command, for exactly one journal (top-ranked, or --pick):
@@ -116,7 +133,8 @@ issn,days_to_first_decision,acceptance_rate,impact_factor,citescore,note
 - **Impact Factor** (Clarivate JCR) has no free data feed. It appears only where the publisher shows it on the journal page.
 - **Acceptance rates** are published by some publishers (Elsevier, Taylor & Francis, some Springer and Wiley journals) and not by many others. Use `--if-missing` to choose how journals without one are treated.
 - **Publisher websites change.** If scraping a site stops working, the Claude web lookup takes over; the per-publisher URL rules live in `journalfit/metrics/publishers.py`.
-- **Submission portals** differ in how they lay out their forms. The assistant fills what it can recognise and tells you what it filled. Always check every page before submitting.
+- **Submission portals** differ in how they lay out their forms. The autopilot fills what it can recognise, pauses on anything it can't, and writes what it did on each page to `form_report.txt`. Always check every page before submitting.
+- **Reviewer emails** are not in any free database, so you add them. A reviewer without an email is never entered.
 
 ## Data sources
 
