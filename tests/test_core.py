@@ -471,3 +471,60 @@ def test_exact_quartile_choice():
     assert f.apply_static_filters(j("Q3"), q1_q3, set()) == "" and f.apply_static_filters(j("Q2"), q1_q3, set())
     assert f.apply_static_filters(j(None), Criteria(quartiles=["Q2"], if_missing="skip"), set()) == "quartile unknown"
     assert "quartile Q1 or Q3" in q1_q3.describe()
+
+
+def test_declarations_are_read_from_the_manuscript():
+    from journalfit.manuscript import extract_declarations
+
+    lines = ["5. Conclusion", "Tourism matters.", "Declarations",
+             "Funding: None.",
+             "Conflict of interest",
+             "The authors declare that they have no conflict of interest.",
+             "Data availability statement",
+             "All data are from the World Bank World Development Indicators,",
+             "which are publicly available.",
+             "Author contributions: I.Y. designed the study and wrote the paper.",
+             "Acknowledgements", "We thank the referees."]
+    d = extract_declarations(lines)
+    assert d["funding"] == "None."
+    assert d["competing_interests"] == "The authors declare that they have no conflict of interest."
+    assert d["data_availability"].endswith("which are publicly available.")
+    assert d["author_contributions"].startswith("I.Y. designed")
+    assert "ethics" not in d and "thank" not in str(d)
+
+
+def test_aims_and_scope_passage():
+    from journalfit.metrics.publishers import extract_aims
+
+    page = ("Journal home Aims and scope Tourism Economics publishes applied economic research on tourism, "
+            "including demand modelling, tourism and growth, and the environmental effects of tourism, using "
+            "rigorous empirical and econometric methods. Editorial board Jane Doe")
+    aims = extract_aims(page)
+    assert aims.startswith("Tourism Economics publishes") and "Editorial board" not in aims
+    assert extract_aims("Nothing relevant here") == ""
+
+
+def test_backups_and_closest_papers(tmp_path, monkeypatch):
+    monkeypatch.setattr("journalfit.config.OVERRIDES_PATH", tmp_path / "none.csv")
+    monkeypatch.setattr("journalfit.config.DATA_DIR", tmp_path)
+
+    class LLM:
+        prompts = []
+
+        def review_scope(self, ms, cands):
+            for c in cands:
+                c.scope_fit = 0.8
+
+        def lookup_metrics(self, j, pages=None):
+            return Metrics()
+
+    p = tmp_path / "paper.docx"
+    make_docx(p)
+    idx = IndexingData()
+    idx.scimago = parse_scimago(SCIMAGO + '4;4;Slow Journal;journal;"12345679";1;Q1;50;Springer;X\n')
+    f = Finder(FakeHttp(), llm=LLM(), indexing=idx, use_browser=False, log=lambda *_: None)
+    res = f.find(manuscript.parse(p), Criteria(scopus=True, max_first_decision_days=90), top=5)
+    assert [b.journal.name for b in res.backups] == ["Slow Journal"]  # good fit, only too slow
+    assert res.backups[0].excluded_reason.startswith("first decision 200")
+    carbon = next(c for c in res.ranked if c.journal.name == "Carbon")
+    assert carbon.example_works and {"title", "year", "doi", "similarity"} <= set(carbon.example_works[0])

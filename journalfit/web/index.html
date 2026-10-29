@@ -169,6 +169,8 @@
     <div class="row" style="margin-top:0;margin-bottom:8px"><button id="openResults">Open results folder</button>
       <span class="muted">The report, plus diagnostics.txt showing what each website returned.</span></div>
     <div id="results"></div>
+    <div id="backupsBox" class="hidden"><h3 style="margin-top:22px">Backup journals <span class="muted" style="font-weight:normal">good fit, but miss one of your rules; your next options if the ones above say no</span></h3>
+      <div id="backups"></div></div>
     <details id="excludedBox"><summary>Journals that matched the topic but broke a rule</summary>
       <ul id="excluded" class="muted"></ul></details>
   </section>
@@ -214,20 +216,21 @@
 
 <dialog id="paperDialog">
   <h2 style="margin-top:0">About this paper</h2>
-  <p class="muted">These answers go into the cover letter, the checklist and the journal's forms exactly as written,
-    so nothing is guessed. They're remembered for next time; change whatever differs for this paper.</p>
+  <p class="muted">Already filled in: from your manuscript where it has these statements, otherwise your last answers or
+    standard wording. Change only what's different, then click Continue. They go into the cover letter, checklist
+    and the journal's forms exactly as written.</p>
   <div class="field"><label for="d_competing_interests">Competing interests</label>
-    <textarea id="d_competing_interests" rows="2" placeholder="e.g. The authors declare no competing interests."></textarea></div>
+    <textarea id="d_competing_interests" rows="2" placeholder="e.g. The authors declare no competing interests."></textarea><span class="muted" id="src_competing_interests"></span></div>
   <div class="field"><label for="d_funding">Funding</label>
-    <textarea id="d_funding" rows="2" placeholder="e.g. This research received no specific grant from any funding agency."></textarea></div>
+    <textarea id="d_funding" rows="2" placeholder="e.g. This research received no specific grant from any funding agency."></textarea><span class="muted" id="src_funding"></span></div>
   <div class="field"><label for="d_ethics">Ethics approval / consent</label>
-    <textarea id="d_ethics" rows="2" placeholder="e.g. Not applicable: the study uses public country-level data."></textarea></div>
+    <textarea id="d_ethics" rows="2" placeholder="e.g. Not applicable: the study uses public country-level data."></textarea><span class="muted" id="src_ethics"></span></div>
   <div class="field"><label for="d_data_availability">Data availability</label>
-    <textarea id="d_data_availability" rows="2" placeholder="e.g. All data are publicly available from the World Bank WDI."></textarea></div>
+    <textarea id="d_data_availability" rows="2" placeholder="e.g. All data are publicly available from the World Bank WDI."></textarea><span class="muted" id="src_data_availability"></span></div>
   <div class="field"><label for="d_preprint">Preprint</label>
-    <textarea id="d_preprint" rows="1" placeholder="e.g. This manuscript has not been posted on a preprint server."></textarea></div>
+    <textarea id="d_preprint" rows="1" placeholder="e.g. This manuscript has not been posted on a preprint server."></textarea><span class="muted" id="src_preprint"></span></div>
   <div class="field"><label for="d_author_contributions">Author contributions</label>
-    <textarea id="d_author_contributions" rows="2" placeholder="e.g. I.Y.: conceptualisation, data, analysis, writing."></textarea></div>
+    <textarea id="d_author_contributions" rows="2" placeholder="e.g. I.Y.: conceptualisation, data, analysis, writing."></textarea><span class="muted" id="src_author_contributions"></span></div>
   <label class="check"><input type="checkbox" id="d_confirm_standard">
     <span>Tick standard author confirmations for me on the journal's site<br>
     <span class="muted">The work is original and not published elsewhere, not under review at another journal, all
@@ -376,7 +379,7 @@ $("findBtn").onclick = async () => {
     await poll(job, $("findLog"), (j) => {
       $("findBtn").disabled = false;
       $("findHint").textContent = j.status === "done" ? "" : "Something went wrong. See the messages above.";
-      if (j.status === "done") showResults(j.result);
+      if (j.status === "done") { lastFound = j.result.declarations_found || {}; showResults(j.result); }
     });
   } catch (e) { alert(e.message); $("findBtn").disabled = false; }
 };
@@ -389,14 +392,24 @@ function showResults(r) {
   $("openResults").onclick = async () => { try { await api("/api/open-folder", {path: r.folder}); } catch (e) { alert(e.message); } };
   const box = $("results");
   box.innerHTML = r.ranked.length ? "" : `<p class="bad">${esc(r.notes.join(" ") || "No journal met every rule.")}</p>`;
-  r.ranked.forEach((c, i) => {
+  r.ranked.forEach((c, i) => box.appendChild(journalCard(c, i, String(i))));
+  const backups = r.backups || [];
+  $("backupsBox").classList.toggle("hidden", !backups.length);
+  $("backups").innerHTML = "";
+  backups.forEach((c, i) => $("backups").appendChild(journalCard(c, i, "b" + i)));
+  $("excluded").innerHTML = r.excluded.map(x => `<li>${esc(x.name)} (${esc(x.publisher)}): ${esc(x.reason)}</li>`).join("");
+  $("excludedBox").classList.toggle("hidden", !r.excluded.length);
+}
+
+function journalCard(c, i, key) {
+  {
     const m = c.metrics;
     const chip = (label, v) => `<span class="chip ${v === null ? "na" : ""}">${label}: ${v === null ? "not published" : esc(v)}</span>`;
     const el = document.createElement("div");
     el.className = "journal";
     el.innerHTML = `
       <div class="top">
-        <div><h3>${i + 1}. ${esc(c.name)}</h3><div class="muted">${esc(c.publisher)} · ISSN ${esc(c.issn)}${c.open_access ? " · open access" : ""}</div></div>
+        <div><h3>${key.startsWith("b") ? "" : (i + 1) + ". "}${esc(c.name)}</h3><div class="muted">${esc(c.publisher)} · ISSN ${esc(c.issn)}${c.open_access ? " · open access" : ""}</div></div>
         <div class="score" title="Overall match score out of 100">${c.score}</div>
       </div>
       <div class="chips">
@@ -409,7 +422,10 @@ function showResults(r) {
       </div>
       <div>${esc(c.scope_reason || `Publishes ${c.matched} papers similar to yours` + (c.refs ? `, and ${c.refs} of your references` : "") + ".")}</div>
       ${c.warnings.length ? `<div class="warn">⚠ ${esc(c.warnings.join("; "))}</div>` : ""}
-      <details><summary>Similar papers it published</summary><ul class="muted">${c.examples.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>
+      ${c.backup_reason ? `<div class="warn">Backup: ${esc(c.backup_reason)}</div>` : ""}
+      ${c.closest.length ? `<div class="muted" style="margin-top:6px"><b>Closest papers this journal published:</b><ul style="margin:4px 0">${c.closest.map(w =>
+          `<li>${w.doi ? `<a href="https://doi.org/${esc(w.doi)}" target="_blank" rel="noopener">${esc(w.title)}</a>` : esc(w.title)}${w.year ? ` (${w.year})` : ""}</li>`).join("")}</ul></div>` : ""}
+      ${c.aims ? `<details><summary>Aims & scope (checked against your paper)</summary><p class="muted">${esc(c.aims)}</p></details>` : ""}
       <div class="row"><button class="primary">Prepare submission for this journal</button>
         <button class="editMetrics">Enter metrics</button>
         ${c.metrics_page ? `<a href="${esc(c.metrics_page)}" target="_blank" rel="noopener">Open metrics page</a>` : ""}
@@ -427,7 +443,7 @@ function showResults(r) {
         <div class="row"><button type="submit" class="primary">Save metrics</button><button type="button" class="cancel">Cancel</button>
           <span class="muted saved"></span></div>
       </form>`;
-    el.querySelector("button").onclick = () => prepare(i, c.name);
+    el.querySelector("button").onclick = () => prepare(key, c.name);
     const form = el.querySelector(".metricsForm");
     const fields = ["days_to_first_decision", "acceptance_rate", "impact_factor", "citescore"];
     el.querySelector(".editMetrics").onclick = () => {
@@ -446,16 +462,23 @@ function showResults(r) {
         form.querySelector(".saved").textContent = "Saved. Click 'Find journals' again to re-rank with your numbers.";
       } catch (err) { alert(err.message); }
     };
-    box.appendChild(el);
-  });
-  $("excluded").innerHTML = r.excluded.map(x => `<li>${esc(x.name)} (${esc(x.publisher)}): ${esc(x.reason)}</li>`).join("");
-  $("excludedBox").classList.toggle("hidden", !r.excluded.length);
+    return el;
+  }
 }
 
+let lastFound = {};
 function prepare(index, name) {
-  const d = (state.settings || {}).declarations || {};
-  DECL.forEach(k => $("d_" + k).value = d[k] || "");
-  $("d_confirm_standard").checked = !!d.confirm_standard;
+  // Pre-filled: your manuscript's own statements first, then your last answers, then standard wording.
+  const saved = (state.settings || {}).declarations || {};
+  const defaults = state.default_declarations || {};
+  DECL.forEach(k => {
+    const [value, source] = lastFound[k] ? [lastFound[k], "from your manuscript"]
+      : saved[k] ? [saved[k], "your answer last time"]
+      : [defaults[k] || "", "standard wording: check it's true for this paper"];
+    $("d_" + k).value = value;
+    $("src_" + k).textContent = source;
+  });
+  $("d_confirm_standard").checked = saved.confirm_standard !== undefined ? !!saved.confirm_standard : true;
   $("paperContinue").onclick = async () => {
     const declarations = Object.fromEntries(DECL.map(k => [k, $("d_" + k).value.trim()]));
     declarations.confirm_standard = $("d_confirm_standard").checked;

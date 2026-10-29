@@ -328,3 +328,13 @@ def test_cover_letter_uses_declarations_word_for_word():
                    {"competing_interests": "The authors declare no competing interests."})
     prompt = msgs.calls[0]["messages"][0]["content"]
     assert "word for word" in prompt and "The authors declare no competing interests." in prompt
+
+
+def test_scope_review_checks_aims_and_closest_papers():
+    c, msgs = make([resp(json.dumps({"journals": [{"id": "S1", "fit": 3, "reason": "aims exclude econometrics"}]}))])
+    j = Journal("S1", "J", aims_scope="We publish qualitative tourism management research only.")
+    cand = Candidate(journal=j, example_works=[{"title": "Tourism and CO2", "year": 2024, "doi": "", "similarity": 0.6}])
+    c.review_scope(Manuscript(path="x", title="t"), [cand])
+    prompt = msgs.calls[0]["messages"][0]["content"]
+    assert "qualitative tourism management research only" in prompt and "Tourism and CO2 (2024" in prompt
+    assert "aims and scope" in prompt.lower() and cand.scope_fit == 0.3

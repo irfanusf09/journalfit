@@ -129,8 +129,10 @@ def run_find(job: Job, body: dict) -> dict:
     if not (ms.title or ms.abstract):
         raise RuntimeError("Could not find a title or abstract in this file.")
     job.say(f"Title: {ms.title}")
+    if ms.declarations:
+        job.say("Found in your manuscript: " + ", ".join(k.replace("_", " ") for k in ms.declarations))
     finder = Finder(HttpClient(), llm=claude, log=job.say)
-    res = finder.find(ms, criteria, top=int(body.get("top") or 10), web_lookup=claude is not None)
+    res = finder.find(ms, criteria, top=int(body.get("top") or 20), web_lookup=claude is not None)
     out = OUTPUT_DIR / (slug(path.stem) or "manuscript")
     report = write_report(res, out)
     job.data.update(result=res, manuscript=ms, claude=claude, out=out)
@@ -140,7 +142,9 @@ def run_find(job: Job, body: dict) -> dict:
     return {
         "title": ms.title, "criteria": criteria.describe(), "notes": res.notes, "report": str(report),
         "folder": str(out),
+        "declarations_found": ms.declarations,
         "ranked": [_cand_json(c) for c in res.ranked],
+        "backups": [_cand_json(c) for c in res.backups],
         "excluded": [{"name": c.journal.name, "publisher": c.journal.publisher, "reason": c.excluded_reason}
                      for c in excluded_order(res.excluded)[:40]],
     }
@@ -156,16 +160,19 @@ def _cand_json(c) -> dict:
         "scope_reason": c.scope_reason, "matched": c.matched_works, "refs": c.reference_hits,
         "warnings": c.warnings, "examples": c.example_titles[:4], "metrics": asdict(m),
         "open_access": j.is_oa or j.in_doaj,
+        "closest": c.example_works[:3],
+        "aims": j.aims_scope[:900],
+        "backup_reason": c.excluded_reason,
         "metrics_page": next(iter(candidate_urls(j)), j.homepage),
         "issn_key": j.issns[0] if j.issns else "",
     }
 
 
-def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str], declarations: dict | None = None) -> dict:
+def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], declarations: dict | None = None) -> dict:
     from .prepare import build_package
 
     res = find_job.data["result"]
-    cand = res.ranked[index]
+    cand = res.backups[int(index[1:])] if str(index).startswith("b") else res.ranked[int(index)]
     ms = find_job.data["manuscript"]
     claude = find_job.data["claude"]
     job.say(f"Preparing the package for {cand.journal.name}...")
@@ -415,6 +422,7 @@ class Handler(BaseHTTPRequestHandler):
                 "providers": [{"id": k, "label": v[0], "model": v[1], "key": v[2]} for k, v in PROVIDERS.items()],
                 "has_api_key": PROVIDERS[provider][2] in keys if provider in PROVIDERS else False,
                 "output_dir": str(OUTPUT_DIR),
+                "default_declarations": settings_mod.DEFAULT_DECLARATIONS,
                 "can_update": (REPO_DIR / ".git").exists(),
             })
         if u.path.startswith("/api/job/"):
@@ -463,7 +471,7 @@ class Handler(BaseHTTPRequestHandler):
                 supplements = [str(Path(p).resolve()) for p in body.get("supplements") or []]
                 if any(supp_root not in Path(p).parents or not Path(p).is_file() for p in supplements):
                     raise ValueError("Supplementary files must be added with the upload box.")
-                return self._json({"job": start_job(run_prepare, find_job, int(body["index"]), supplements,
+                return self._json({"job": start_job(run_prepare, find_job, str(body["index"]), supplements,
                                                     body.get("declarations")).id})
             if u.path == "/api/open-folder":
                 p = Path(body["path"]).resolve()

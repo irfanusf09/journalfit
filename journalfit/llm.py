@@ -211,21 +211,33 @@ class LLM:
         blocks = []
         for c in candidates:
             j = c.journal
+            closest = c.example_works or [{"title": t, "year": "", "similarity": ""} for t in c.example_titles[:3]]
             blocks.append(
                 f"<journal id=\"{j.openalex_id}\">\nName: {j.name}\nPublisher: {j.publisher}\n"
                 f"Subject areas: {', '.join(j.subject_areas) or 'unknown'}\n"
-                f"Similar papers it published recently ({c.matched_works} found):\n"
-                + "\n".join(f"- {t}" for t in c.example_titles[:6]) + "\n</journal>"
+                + (f"Aims and scope (from the journal's site): {j.aims_scope[:1500]}\n" if j.aims_scope
+                   else "Aims and scope: not available; judge from the papers it publishes.\n")
+                + f"Papers it published in the last few years that are closest to this manuscript "
+                f"({c.matched_works} related papers found; similarity 0-1 to this manuscript):\n"
+                + "\n".join(f"- {w['title']} ({w.get('year') or 'n.d.'}; similarity {w.get('similarity', '')})"
+                             for w in closest[:3])
+                + "\n</journal>"
             )
         prompt = (
             f"Manuscript title: {ms.title}\nArticle type: {ms.article_type or 'unknown'}\n"
             f"Field: {ms.field_of_study or 'unknown'}\nKeywords: {', '.join(ms.keywords)}\n"
             f"Abstract: {ms.abstract}\n\n" + "\n".join(blocks) + "\n\n"
-            "For each journal, rate 0-10 how well this manuscript fits the journal's scope and "
-            "readership, as an experienced editor would. 10 = core topic of the journal; 5 = "
-            "plausible but peripheral; 0 = out of scope (desk rejection likely). Consider whether "
-            "the journal publishes this article type and whether the paper's contribution level "
-            "suits it. Give a one-sentence reason grounded in the evidence. Use the journal ids given."
+            "For each journal, rate 0-10 how well this manuscript fits, as an experienced editor of that "
+            "journal would:\n"
+            "1. Check the manuscript against the journal's stated aims and scope (when given): topic, "
+            "approach (e.g. empirical/econometric vs. theoretical/managerial), discipline and readership. "
+            "A journal whose aims exclude this kind of work gets 3 or less even if the topic sounds related.\n"
+            "2. Check whether the journal actually publishes papers like this one: the closest papers listed "
+            "and how similar they are.\n"
+            "3. Consider the article type and whether the contribution level suits the journal.\n"
+            "10 = core topic and approach; 5 = plausible but peripheral; 0 = out of scope (desk rejection "
+            "likely). The reason (one or two sentences) must say how the paper matches or misses the aims "
+            "and scope, and name the closest published paper when there is a good one. Use the ids given."
         )
         data = self.structured("You are a senior journal editor advising an author.", prompt, SCOPE_SCHEMA)
         by_id = {c.journal.openalex_id: c for c in candidates}

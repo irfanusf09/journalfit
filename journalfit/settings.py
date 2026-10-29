@@ -60,6 +60,21 @@ DECLARATION_FIELDS = {
 }
 
 
+# Standard wording used when neither the manuscript nor an earlier answer says otherwise.
+DEFAULT_DECLARATIONS = {
+    "competing_interests": "The authors declare that they have no known competing financial interests or "
+                           "personal relationships that could have appeared to influence the work reported in this paper.",
+    "funding": "This research did not receive any specific grant from funding agencies in the public, "
+               "commercial, or not-for-profit sectors.",
+    "data_availability": "The data that support the findings of this study are available from the "
+                         "corresponding author upon reasonable request.",
+    "ethics": "Not applicable. This study does not involve human participants or animals.",
+    "preprint": "This manuscript has not been posted on a preprint server.",
+    "author_contributions": "All authors contributed to the study conception and design, analysis and "
+                            "writing, and read and approved the final manuscript.",
+}
+
+
 def declarations(s: dict | None = None) -> dict:
     s = s if s is not None else load()
     d = s.get("declarations") or {}

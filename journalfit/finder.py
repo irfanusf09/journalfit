@@ -12,7 +12,7 @@ from typing import Callable
 from . import config, trace
 from .config import Criteria
 from .http import FetchError, HttpClient
-from .metrics.publishers import PageFetcher, load_overrides, scrape_metrics
+from .metrics.publishers import PageFetcher, extract_aims, load_overrides, scrape_metrics
 from .models import Candidate, Journal, Manuscript, Metrics
 from .similarity import tfidf_similarities, top_terms
 from .sources.crossref import review_speed
@@ -31,6 +31,7 @@ class FindResult:
     excluded: list[Candidate] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)
+    backups: list[Candidate] = field(default_factory=list)  # good fits that miss one speed/selectivity rule
 
 
 class Finder:
@@ -93,6 +94,8 @@ class Finder:
                 matched_works=len(pairs), reference_hits=ref_counts.get(sid, 0),
                 text_fit=0.75 * strength + 0.25 * breadth * strength,
                 example_titles=[w.title for _, w in pairs[:6]],
+                example_works=[{"title": w.title, "year": w.year, "doi": w.doi, "similarity": round(s, 2)}
+                               for s, w in pairs[:3]],
             )
             cands[sid] = c
         top_fit = max((c.text_fit for c in cands.values()), default=0) or 1
@@ -188,6 +191,8 @@ class Finder:
                 trace.note("    using AI metrics remembered from an earlier run")
             scraped, pages = scrape_metrics(j, self.fetcher)
             j.metrics.merge(scraped)
+            for text in pages.values():  # the same pages usually carry the aims & scope
+                j.aims_scope = j.aims_scope or extract_aims(text)
             if j.metrics.days_to_acceptance is None:
                 self._crossref_speed(j)
             missing = j.metrics.days_to_first_decision is None or \
@@ -219,7 +224,7 @@ class Finder:
         trace.note("    Crossref: too few recent papers record received/accepted dates")
 
     # ---------------------------------------------------------------- pipeline
-    def find(self, ms: Manuscript, criteria: Criteria, top: int = 10, metrics_for: int = 25,
+    def find(self, ms: Manuscript, criteria: Criteria, top: int = 20, metrics_for: int = 40,
              web_lookup: bool = True, lookup_top: int | None = None) -> FindResult:
         notes: list[str] = []
         trace.start()
@@ -256,7 +261,6 @@ class Finder:
         if lookup_top is None:  # cheap providers can afford to check more journals
             lookup_top = getattr(self.llm, "lookup_top", 8)
         self.collect_metrics(shortlist, criteria, web_lookup, lookup_top)
-        self.fetcher.close()
 
         kept = []
         for c in shortlist:
@@ -267,14 +271,20 @@ class Finder:
             else:
                 kept.append(c)
 
-        if self.llm and kept:
-            self.log("Reviewing scope fit of the finalists...")
-            # Every finalist gets a scope rating, so none is ranked without an editor's view.
-            review = sorted(kept, key=lambda c: -(c.text_fit + 0.1 * min(c.reference_hits, 5)))[:30]
-            try:
-                self.llm.review_scope(ms, review)
-            except Exception as e:
-                notes.append(f"Scope review unavailable: {e}")
+        # Journals that fit but miss one speed/selectivity rule are kept as backups.
+        in_shortlist = {id(c) for c in shortlist}
+        near = [c for c in excluded if id(c) in in_shortlist]
+        if self.llm and (kept or near):
+            self.log("Reading the journals' aims & scope...")
+            self.gather_aims(kept + near)
+            self.log("Reviewing scope fit against each journal's aims & scope...")
+            # Every finalist (and backup) gets a scope rating, so none is listed without an editor's view.
+            review = sorted(kept + near, key=lambda c: -(c.text_fit + 0.1 * min(c.reference_hits, 5)))[:45]
+            for i in range(0, len(review), 15):  # small batches keep the AI's attention on each journal
+                try:
+                    self.llm.review_scope(ms, review[i:i + 15])
+                except Exception as e:
+                    notes.append(f"Scope review unavailable for some journals: {e}")
 
         # An editor would almost certainly desk-reject these: don't recommend them at all.
         for c in [c for c in kept if c.scope_fit is not None and c.scope_fit < MIN_SCOPE_FIT]:
@@ -282,16 +292,33 @@ class Finder:
             c.excluded_reason = f"poor scope fit ({c.scope_fit * 10:.0f}/10): desk rejection likely"
             excluded.append(c)
 
-        max_refs = max((c.reference_hits for c in kept), default=0) or 1
-        for c in kept:
+        max_refs = max((c.reference_hits for c in kept + near), default=0) or 1
+        for c in kept + near:
             c.score = final_score(c, max_refs)
         kept.sort(key=lambda c: -c.score)
+        backups = sorted([c for c in near if c.scope_fit is None or c.scope_fit >= 0.5], key=lambda c: -c.score)[:10]
         if not kept:
             notes.append("No journal met every rule. Loosen a threshold or use --if-missing keep.")
         elif len(kept) < top:
             notes.append(f"Only {len(kept)} journals passed every rule and fit the paper well; "
-                         "the excluded list shows the near misses.")
-        return FindResult(ms, criteria, kept[:top], excluded, notes, trace.lines())
+                         "see the backup journals below.")
+        self.fetcher.close()
+        return FindResult(ms, criteria, kept[:top], excluded, notes, trace.lines(), backups)
+
+    def gather_aims(self, cands: list[Candidate]) -> None:
+        """Aims & scope text from the journal's own pages, or via the AI provider's page reader."""
+        for c in cands:
+            j = c.journal
+            if j.aims_scope:
+                continue
+            if hasattr(self.llm, "web_pages"):
+                try:
+                    pages = self.llm.web_pages(f"{j.name} {j.publisher.split()[0] if j.publisher else ''} aims and scope", j, limit=1)
+                except Exception:
+                    pages = {}
+                for text in pages.values():
+                    j.aims_scope = extract_aims(text) or text[:1500]
+            trace.note(f"  aims & scope for {j.name}: " + (f"{len(j.aims_scope)} chars" if j.aims_scope else "not found"))
 
 
 class MetricCache:

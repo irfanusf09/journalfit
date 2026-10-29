@@ -343,3 +343,20 @@ def save_override(issn: str, values: dict, note: str = "", path=None) -> None:
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in w.fieldnames})
+
+
+AIMS_HEADINGS = re.compile(r"(aims?\s*(and|&)\s*scope|about\s+this\s+journal|journal\s+overview|scope\s+of\s+the\s+journal)", re.I)
+AIMS_END = re.compile(r"(editorial board|submission guidelines|journal metrics|instructions for authors|"
+                      r"latest articles|most cited|open access|subscribe|editor[- ]in[- ]chief|indexing)", re.I)
+
+
+def extract_aims(text: str, limit: int = 1500) -> str:
+    """The aims & scope passage from a journal page's text ("" if the page has none)."""
+    m = AIMS_HEADINGS.search(text)
+    if not m:
+        return ""
+    body = text[m.end():m.end() + 4000]
+    end = AIMS_END.search(body, 200)  # a passage of at least a few sentences
+    body = body[:end.start()] if end else body
+    body = body.strip(" :.-")
+    return body[:limit] if len(body) > 120 else ""

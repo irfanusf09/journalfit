@@ -15,7 +15,7 @@ from ..http import FetchError, HttpClient
 from ..models import Journal, Metrics
 
 API = "https://api.openalex.org"
-WORK_FIELDS = "id,title,publication_year,primary_location,abstract_inverted_index,cited_by_count"
+WORK_FIELDS = "id,doi,title,publication_year,primary_location,abstract_inverted_index,cited_by_count"
 
 
 @dataclass
@@ -26,6 +26,7 @@ class Work:
     year: int
     source_id: str
     source_name: str
+    doi: str = ""
 
 
 def _short(openalex_url: str) -> str:
@@ -100,6 +101,7 @@ class OpenAlex:
             abstract=_abstract(r.get("abstract_inverted_index")),
             year=r.get("publication_year") or 0,
             source_id=_short(src["id"]), source_name=src.get("display_name", ""),
+            doi=(r.get("doi") or "").replace("https://doi.org/", ""),
         )
 
     def journals(self, source_ids: list[str]) -> dict[str, Journal]:

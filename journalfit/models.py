@@ -22,6 +22,8 @@ class Manuscript:
     field_of_study: str = ""
     article_type: str = ""
     search_queries: list[str] = field(default_factory=list)
+    # Statements found in the manuscript itself (funding, competing interests, ...)
+    declarations: dict = field(default_factory=dict)
 
     def summary_text(self) -> str:
         """Text used for similarity matching: title + abstract + keywords."""
@@ -73,6 +75,7 @@ class Journal:
     scopus_indexed: bool | None = None  # None = could not verify
     scopus_active: bool | None = None
     subject_areas: list[str] = field(default_factory=list)
+    aims_scope: str = ""  # from the journal's own pages, when readable
     metrics: Metrics = field(default_factory=Metrics)
 
 
@@ -86,5 +89,7 @@ class Candidate:
     scope_reason: str = ""
     score: float = 0.0
     example_titles: list[str] = field(default_factory=list)
+    # Closest papers the journal published: {"title", "year", "doi", "similarity"}
+    example_works: list[dict] = field(default_factory=list)
     excluded_reason: str = ""
     warnings: list[str] = field(default_factory=list)

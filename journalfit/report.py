@@ -78,13 +78,25 @@ def write_report(res: FindResult, out_dir: Path) -> Path:
             lines.append(f"- **Why:** {c.scope_reason}")
         if c.warnings:
             lines.append(f"- **Note:** {'; '.join(c.warnings)}")
-        if c.example_titles:
+        if c.example_works:
+            lines.append("- **Closest papers it published:**")
+            lines += [f"  - {w['title']} ({w.get('year') or 'n.d.'})"
+                      + (f" https://doi.org/{w['doi']}" if w.get("doi") else "") for w in c.example_works[:3]]
+        elif c.example_titles:
             lines.append("- **Similar papers it published:**")
             lines += [f"  - {t}" for t in c.example_titles[:4]]
+        if j.aims_scope:
+            lines.append(f"- **Aims & scope (checked):** {j.aims_scope[:400]}…")
         if m.sources:
             lines.append("- **Metric sources:** " + "; ".join(f"{k}: {v}" for k, v in sorted(m.sources.items())))
         if j.homepage:
             lines.append(f"- **Homepage:** {j.homepage}")
+        lines.append("")
+    if res.backups:
+        lines += ["## Backup journals (good fit, miss one rule)", ""]
+        for c in res.backups:
+            lines.append(f"- **{c.journal.name}** ({c.journal.publisher}), score {c.score:g}: {c.excluded_reason}."
+                         + (f" {c.scope_reason}" if c.scope_reason else ""))
         lines.append("")
     if res.excluded:
         lines += ["## Excluded journals that matched the topic", ""]

@@ -99,6 +99,10 @@ def test_click_through(server):
         page.click("#results .journal >> nth=0 >> text=Prepare submission for this journal")
         # "About this paper" is asked first, so nothing in the letter or forms is guessed.
         page.wait_for_selector("#paperDialog[open]")
+        # Pre-filled: standard wording where the manuscript has no statement, labelled as such.
+        assert "did not receive any specific grant" in page.input_value("#d_funding")
+        assert "standard wording" in page.inner_text("#src_funding")
+        assert page.is_checked("#d_confirm_standard")
         page.fill("#d_competing_interests", "The authors declare no competing interests.")
         page.check("#d_confirm_standard")
         page.click("#paperContinue")

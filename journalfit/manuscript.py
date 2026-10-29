@@ -122,6 +122,7 @@ def parse(path: str | Path) -> Manuscript:
             break
 
     body = lines[:ref_start]
+    ms.declarations = extract_declarations(lines[:ref_start])
     ms.body_text = "\n".join(body)
     ms.word_count = sum(len(l.split()) for l in body)
     ms.references = _split_references(lines[ref_start + 1:]) if ref_start < len(lines) else []
@@ -145,3 +146,57 @@ def _split_references(lines: list[str]) -> list[str]:
         else:
             refs[-1] += " " + line
     return [r.strip() for r in refs if len(r) > 20]
+
+
+DECLARATION_HEADINGS = {
+    "competing_interests": r"(declaration\s+of\s+)?(competing|conflicts?\s+of)\s+interests?|conflicts?\s+of\s+interest|"
+                           r"disclosure\s+statement|declaration\s+of\s+interests?",
+    "funding": r"funding(\s+(information|statement|sources?|details))?|financial\s+(support|disclosure)|"
+               r"sources?\s+of\s+funding|grant\s+information",
+    "data_availability": r"data\s+(availability|access|sharing)(\s+statement)?|availability\s+of\s+(data|data\s+and\s+materials?)",
+    "ethics": r"ethic(s|al)(\s+(approval|statement|declarations?|considerations?))?(\s+and\s+consent.*)?|"
+              r"consent\s+to\s+participate|informed\s+consent",
+    "author_contributions": r"authors?'?\s+contributions?|credit\s+(authorship\s+)?(contribution\s+)?statement|"
+                            r"contributions?\s+of\s+the\s+authors",
+    "preprint": r"preprint(\s+statement)?",
+}
+
+
+def extract_declarations(lines: list[str]) -> dict:
+    """Funding, competing interests, data availability, ethics, contributions and preprint
+    statements written in the manuscript (usually under 'Declarations' before the references)."""
+    found: dict[str, str] = {}
+    current, buf = None, []
+
+    def close():
+        if current and buf:
+            text = " ".join(buf).strip()
+            if len(text) >= 2 and current not in found:
+                found[current] = text[:800]
+
+    for line in lines:
+        # "Funding: None." or a heading line on its own ("Conflict of interest").
+        head, rest = (line.split(":", 1) if ":" in line[:80] else (line, ""))
+        head = re.sub(r"^\s*\d+(\.\d+)*\.?\s*", "", head).strip(" .-–—*")
+        key = None
+        if len(head) <= 80:
+            for k, rx in DECLARATION_HEADINGS.items():
+                if re.fullmatch(rx, head, re.I):
+                    key = k
+                    break
+        if key:
+            close()
+            current, buf = key, ([rest.strip()] if rest.strip() else [])
+            continue
+        if current:
+            # A new short heading ends the statement.
+            if len(line) < 60 and not line.endswith(".") and buf:
+                close()
+                current, buf = None, []
+                continue
+            buf.append(line.strip())
+            if sum(len(b) for b in buf) > 800:
+                close()
+                current, buf = None, []
+    close()
+    return found
