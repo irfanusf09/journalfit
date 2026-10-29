@@ -1,0 +1,14 @@
+<html><head><script src="common.js"></script></head><body>
+<ul class="steps"><li aria-current="step">Type, Title &amp; Abstract</li><li>Authors</li><li>Reviewers</li><li>Details</li><li>Files</li><li>Review &amp; Submit</li></ul>
+<h2>Step 1: Type, Title &amp; Abstract</h2>
+<div id="err" class="error"></div>
+<table>
+<tr><td>Manuscript Type *</td><td><select name="type"><option>Please select</option><option>Review Article</option><option>Original Article</option><option>Letter to the Editor</option></select></td></tr>
+<tr><td>Title *</td><td><input type="text" name="title"></td></tr>
+<tr><td>Running Head *</td><td><input type="text" name="running"></td></tr>
+<tr><td>Abstract *</td><td><textarea name="abstract"></textarea></td></tr>
+<tr><td>Keywords *</td><td><input type="text" name="keywords"></td></tr>
+</table>
+<button onclick="mark('cancelled')">Cancel Submission</button>
+<button onclick="next('step2.html', () => required(['type','title','running','abstract','keywords']))">Save &amp; Continue</button>
+</body></html>

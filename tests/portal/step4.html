@@ -1,0 +1,16 @@
+<html><head><script src="common.js"></script></head><body>
+<h2>Step 4: Details &amp; Comments</h2>
+<div id="err" class="error"></div>
+<div><label for="wc">Word count *</label><input id="wc" type="number" name="words"></div>
+<div><label for="nf">Number of figures *</label><input id="nf" type="number" name="figs"></div>
+<div><label for="nt">Number of tables *</label><input id="nt" type="number" name="tabs"></div>
+<div><p>Has this manuscript been submitted previously to this journal? *</p>
+  <label><input type="radio" name="prev" value="y">Yes</label><label><input type="radio" name="prev" value="n">No</label></div>
+<div><p>Is there funding to report for this submission? *</p>
+  <label><input type="radio" name="fund" value="y">Yes</label><label><input type="radio" name="fund" value="n">No</label></div>
+<div><label for="ci">Conflict of Interest statement *</label><textarea id="ci" name="coi"></textarea></div>
+<div><label for="da">Data Availability Statement *</label><textarea id="da" name="data"></textarea></div>
+<div><label for="cl">Cover Letter</label><textarea id="cl" name="cover"></textarea></div>
+<div><label><input type="checkbox" name="newsletter">Send me the publisher's newsletter</label></div>
+<button onclick="next('step5.html', () => required(['words','figs','tabs','prev','fund','coi','data']))">Save &amp; Continue</button>
+</body></html>

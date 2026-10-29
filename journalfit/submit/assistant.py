@@ -155,6 +155,19 @@ COLLECT_JS = r"""
 
 # Order matters: more specific labels first.
 FIELD_RULES: list[tuple[str, re.Pattern]] = [
+    ("abstract_words", re.compile(r"abstract\s+(word\s*count|length\s+in\s+words)|words?\s+in\s+(the\s+)?abstract", re.I)),
+    ("word_count", re.compile(r"word[\s_-]*count|number\s+of\s+words|total\s+words|manuscript\s+length\s+in\s+words", re.I)),
+    ("figure_count", re.compile(r"(number|no\.?|count)\s+of\s+(figures|illustrations|images)|figures?[\s_-]*count|"
+                                r"how\s+many\s+figures", re.I)),
+    ("table_count", re.compile(r"(number|no\.?|count)\s+of\s+tables|tables?[\s_-]*count|how\s+many\s+tables", re.I)),
+    ("reference_count", re.compile(r"(number|no\.?|count)\s+of\s+references|references?[\s_-]*count", re.I)),
+    ("highlights", re.compile(r"\bhighlights\b", re.I)),
+    ("grant_number", re.compile(r"grant[\s_-]*(number|no\b|id\b)|award[\s_-]*(number|no\b|id\b)|project[\s_-]*number", re.I)),
+    ("funder_name", re.compile(r"funder([\s_-]*name)?\b|funding[\s_-]*(agency|body|organi[sz]ation|source\s+name)|"
+                               r"name\s+of\s+(the\s+)?funder|sponsor", re.I)),
+    ("ai_disclosure", re.compile(r"artificial\s+intelligence|generative\s+ai|\bgen\s*ai\b|large\s+language\s+model|"
+                                 r"\bai[\s-]+(assisted|tools?|use|technolog)", re.I)),
+    ("acknowledgements", re.compile(r"acknowledge?ments?", re.I)),
     ("running_title", re.compile(r"running[\s_-]*(head|title)|short[\s_-]*title", re.I)),
     ("title", re.compile(r"\b(full[\s_-]*)?(manuscript|article|paper|submission)?[\s_-]*title\b", re.I)),
     ("abstract", re.compile(r"\babstract\b", re.I)),
@@ -166,9 +179,15 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
     ("ethics", re.compile(r"ethic(s|al)\s+(approval|statement|declaration)|informed\s+consent", re.I)),
     ("author_contributions", re.compile(r"author(s'?)?\s+contributions?|credit\s+(author\s+)?statement", re.I)),
     ("article_type", re.compile(r"(article|manuscript|submission|paper)[\s_-]*type|type\s+of\s+(article|manuscript|paper|submission)", re.I)),
+    ("preprint", re.compile(r"preprint", re.I)),
+    ("previous_submission", re.compile(r"previous(ly)?\s+(submitted|submission)|submitted\s+(this|the)\s+(manuscript|paper)\s+"
+                                       r"(before|previously)|prior\s+submission", re.I)),
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
     ("cover_letter_file", re.compile(r"cover[\s_-]*letter", re.I)),
+    ("title_page_file", re.compile(r"title[\s_-]*page", re.I)),
+    ("highlights_file", re.compile(r"highlights", re.I)),
+    ("figure_file", re.compile(r"\bfig(ure)?s?\b", re.I)),
     ("supplementary_file", re.compile(r"supplement|supporting[\s_-]*(info|material|file)|additional[\s_-]*file|"
                                       r"appendi(x|ces)|electronic[\s_-]*supplementary|\bESM\b|\bSI\b", re.I)),
     ("manuscript_file", re.compile(r"manuscript|main[\s_-]*(document|file)|article file|upload|file", re.I)),
@@ -182,6 +201,9 @@ class Plan:
     supplements: list[str] = field(default_factory=list)
     last_upload: float = 0.0  # when the last file was handed to the site
     pending_uploads: bool = False  # files still waiting to go up on an item-type page
+    people: dict = field(default_factory=dict)  # {"author": [...], "reviewer": [...]} from the author's records
+    figures: list[str] = field(default_factory=list)  # separate figure files, when the journal wants them
+    page_state: dict = field(default_factory=dict)  # what the last fill_page saw (for the autopilot and score)
 
 
 def running_title(title: str) -> str:
@@ -214,14 +236,44 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
         "author_contributions": decl.get("author_contributions", ""),
         # Standard confirmations, only if the author switched them on.
         "confirm": STANDARD_CONFIRMATIONS if decl.get("confirm_standard") else "",
+        "preprint": decl.get("preprint", ""),
+        "previous_submission": decl.get("previous_submission", ""),
+        "ai_disclosure": decl.get("ai_disclosure", ""),
+        "acknowledgements": decl.get("acknowledgements", ""),
     })
+    # Facts about the manuscript that forms ask for as numbers.
+    for k in ("word_count", "figures", "tables", "references", "abstract_words"):
+        if meta.get(k) not in (None, ""):
+            values[{"figures": "figure_count", "tables": "table_count",
+                    "references": "reference_count"}.get(k, k)] = str(meta[k])
+    funders = meta.get("funders") or []
+    if funders:
+        values["funder_name"] = "; ".join(f["name"] for f in funders if f.get("name"))
+        values["grant_number"] = "; ".join(f["award"] for f in funders if f.get("award"))
+    hl = package_dir / "highlights.txt"
+    if hl.exists():
+        values["highlights"] = hl.read_text(encoding="utf-8").strip()
     manuscript = next(package_dir.glob("manuscript.*"), None)
+    blinded = next(package_dir.glob("anonymised_manuscript.*"), None)
     files = {
-        "manuscript_file": str(manuscript) if manuscript else "",
+        # Double-blind journals get the anonymised copy as "the manuscript" and the title page separately.
+        "manuscript_file": str(blinded or manuscript or ""),
         "cover_letter_file": str(package_dir / "cover_letter.docx") if (package_dir / "cover_letter.docx").exists() else "",
+        "title_page_file": str(package_dir / "title_page.docx") if (package_dir / "title_page.docx").exists() else "",
+        "highlights_file": str(package_dir / "highlights.docx") if (package_dir / "highlights.docx").exists() else "",
     }
     supplements = sorted(str(p) for p in (package_dir / "supplementary").glob("*") if p.is_file())
-    return Plan(values, {k: v for k, v in files.items() if v}, supplements), meta
+    figures = sorted((str(p) for p in (package_dir / "figures").glob("*") if p.is_file()), key=_natural)
+    from . import people as people_mod
+
+    persons = {"author": people_mod.load(package_dir, "authors.json"),
+               # A suggested reviewer goes in only with an email: sites need it, and it is never guessed.
+               "reviewer": [p for p in people_mod.load(package_dir, "reviewers.json") if p.get("email")]}
+    return Plan(values, {k: v for k, v in files.items() if v}, supplements, people=persons, figures=figures), meta
+
+
+def _natural(s: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", Path(s).name)]
 
 
 # Person-detail fields (e.g. an author's "Title: Dr/Prof") must never get manuscript text.
@@ -232,7 +284,8 @@ STANDARD_CONFIRMATIONS = (
     "The work is original and not published elsewhere; it is not under consideration at another "
     "journal; all co-authors have approved the submission; the author agrees to the journal's "
     "policies, terms and ethical guidelines.")
-DECLARATIONS = ("competing_interests", "funding_statement", "data_availability", "ethics", "author_contributions")
+DECLARATIONS = ("competing_interests", "funding_statement", "data_availability", "ethics", "author_contributions",
+                "preprint", "ai_disclosure", "acknowledgements", "highlights")
 
 
 def match_field(label: str, is_file: bool) -> str | None:
@@ -261,6 +314,43 @@ def match_bits(bits: list[str], is_file: bool) -> str | None:
     return None
 
 
+# Yes/No questions settled by the author's own statements: (statement key, question pattern).
+QUESTIONS: list[tuple[str, re.Pattern]] = [
+    ("previous_submission", re.compile(r"previous(ly)?\s+(submitted|submission|considered|rejected)|submitted\s+"
+                                       r"(this|the)\s+(manuscript|paper|article|work)\s+(before|previously)|"
+                                       r"prior\s+submission|been\s+submitted\s+(to|before|previously|elsewhere)|"
+                                       r"submitted\s+(previously|before|elsewhere)", re.I)),
+    ("preprint", re.compile(r"preprint", re.I)),
+    ("competing_interests", re.compile(r"competing\s+interest|conflicts?\s+of\s+interest|declaration\s+of\s+interest", re.I)),
+    ("funding_statement", re.compile(r"\bfund(ing|ed|er)\b|\bgrants?\b|financial\s+support", re.I)),
+    ("ethics", re.compile(r"ethic|human\s+(participants|subjects)|\banimals?\b|informed\s+consent", re.I)),
+    ("ai_disclosure", re.compile(r"artificial\s+intelligence|generative\s+ai|\bai\b|large\s+language\s+model|chatgpt", re.I)),
+]
+NEGATIVE = re.compile(r"\b(no|not|none|nil|never|without|did\s+not|does\s+not|have\s+not|has\s+not|"
+                      r"do\s+not|were\s+not|was\s+not)\b|n/a|not\s+applicable", re.I)
+
+
+def answer_question(bits: list[str], options: list[str], values: dict[str, str]) -> str | None:
+    """'Has this manuscript been submitted before?' -> 'No', when the author's statement says so.
+
+    Only for plain Yes/No (or Not applicable) choices, and only when exactly one statement
+    matches the question; anything else is left to the AI mapper or the author.
+    """
+    question = " | ".join(words_of(b) for b in bits[:2])
+    keys = [k for k, rx in QUESTIONS if rx.search(question) and values.get(k)]
+    if len(keys) != 1:
+        return None
+    statement = values[keys[0]]
+    yes = [o for o in options if re.match(r"^\s*yes\b", o, re.I)]
+    no = [o for o in options if re.match(r"^\s*no\b", o, re.I)]
+    na = [o for o in options if re.search(r"not\s+applicable|^\s*n/?a\s*$", o, re.I)]
+    if len(yes) != 1 or len(no) != 1:
+        return None
+    if keys[0] == "ethics" and re.search(r"not\s+applicable", statement, re.I) and len(na) == 1:
+        return na[0]
+    return no[0] if NEGATIVE.search(statement) else yes[0]
+
+
 BAD_TYPES = re.compile(r"review|letter|editorial|comment|short|brief|erratum|correction|book|perspective|case", re.I)
 
 
@@ -277,8 +367,13 @@ def pick_article_type(options: list[str], article_type: str) -> str | None:
 
 
 ITEM_TYPES = [  # (file key, option pattern) in upload order
-    ("manuscript_file", re.compile(r"^\s*(main\s+)?manuscript(\s+file)?\s*$|^\s*(main\s+)?(article|document)\s*$", re.I)),
+    ("manuscript_file", re.compile(r"^\s*(main\s+)?(blinded\s+|anonymi[sz]ed\s+)?manuscript(\s+file)?"
+                                   r"(\s*\((blinded|anonymi[sz]ed|without\s+author\s+details)\))?\s*$|"
+                                   r"^\s*(main\s+)?(article|document)\s*$|^\s*(blinded|anonymi[sz]ed)\s+manuscript\b", re.I)),
+    ("title_page_file", re.compile(r"title\s*page", re.I)),
     ("cover_letter_file", re.compile(r"cover\s*letter", re.I)),
+    ("highlights_file", re.compile(r"highlight", re.I)),
+    ("figure_file", re.compile(r"^\s*figures?\s*$|^\s*figure\b(?!.*caption)", re.I)),
     ("supplementary_file", re.compile(r"supplement|supporting|electronic\s+supplementary", re.I)),
 ]
 # Extra files are typed by their name: Figure1.tif -> "Figure", Table2.docx -> "Table", ...
@@ -297,7 +392,7 @@ def _supplement_pattern(path: str, options: list[str]):
     for name_rx, option_rx in FILE_KINDS:
         if name_rx.search(name) and any(option_rx.search(o) for o in options):
             return option_rx
-    return ITEM_TYPES[2][1]
+    return dict(ITEM_TYPES)["supplementary_file"]
 
 
 def _is_item_type_list(f: dict) -> bool:
@@ -325,6 +420,14 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
     for key, pattern in ITEM_TYPES:
         if key == "supplementary_file":
             pending += [(p, _supplement_pattern(p, options)) for p in plan.supplements if p not in used]
+        elif key == "figure_file":
+            # Separate figures only where the site has a Figure type (otherwise they stay in the manuscript).
+            if any(pattern.search(o) for o in options):
+                pending += [(p, pattern) for p in plan.figures if p not in used]
+        elif key in ("title_page_file", "highlights_file"):
+            p = plan.files.get(key)
+            if p and p not in used and any(pattern.search(o) for o in options):
+                pending.append((p, pattern))
         else:
             p = plan.files.get(key)
             if p and p not in used:
@@ -392,11 +495,19 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
     `mapper` (optional, see ai_mapper) lets the AI decide which prepared item goes in which box;
     the built-in label rules are used where it gives no answer.
     """
+    from . import navigator
+    from . import people as people_mod
+
     filled = 0
     used_files: set[str] = uploaded if uploaded is not None else set()
     saw_file_input = False
     supplements_done = False
     still_needed: list[str] = []
+    left_for_you = 0  # boxes the author still has to fill on this page
+    seen = 0
+    placed: dict[str, set[int]] = {"author": set(), "reviewer": set()}
+    person_boxes = {"author": 0, "reviewer": 0}
+    text = navigator.page_text(page) if any(plan.people.values()) else ""
     idx = 0
     for frame in page.frames:
         try:
@@ -404,6 +515,23 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
         except Exception:
             continue  # cross-origin or detached frame
         idx += len(fields) + 1
+        # Person boxes (authors, suggested reviewers) are filled only from the author's records.
+        person_fields = []
+        for f in fields:
+            bits = f.get("bits") or [f["label"]]
+            if f["type"] in ("file", "checkbox", "radio") or not people_mod.is_person_field(bits):
+                continue
+            f["_person"] = True
+            r = people_mod.role(bits)
+            if r:
+                f["_role"], f["_attr"] = r, people_mod.attribute(bits)
+                person_fields.append(f)
+                person_boxes[r] += 1
+        assigned: dict = {}
+        if person_fields and any(plan.people.values()):
+            assigned, used = people_mod.assign(person_fields, plan.people, text)
+            for r in placed:
+                placed[r] |= used.get(r, set())
         try:
             done = upload_with_item_type(frame, fields, plan, used_files)
         except Exception as e:
@@ -437,10 +565,16 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                 ai_key, ai_option = ai[f["idx"]]
                 person = any(PERSON_FIELD.search(w) for w in map(words_of, (f.get("bits") or [])[:4]))
                 key = None if person else ai_key  # hard rule: person fields are never filled
+            if not key and f["type"] in ("radio", "select") and \
+                    answer_question(f.get("bits") or [], f.get("options") or [], plan.values):
+                key = "question"  # a Yes/No question the author's statements settle
             action = "not recognised"
             loc = frame.locator(f'[data-jf-idx="{f["idx"]}"]')
+            seen += 1
             try:
-                if not key:
+                if f.get("_person"):
+                    action = _fill_person(loc, f, assigned.get(f["idx"]))
+                elif not key:
                     pass
                 elif is_file and key == "supplementary_file":
                     left = [p for p in plan.supplements if p not in used_files]
@@ -452,6 +586,15 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                         action = "uploaded " + ", ".join(Path(p).name for p in batch)
                     else:
                         action = "supplementary already uploaded"
+                elif is_file and key == "figure_file":
+                    left = [p for p in plan.figures if p not in used_files]
+                    if left:
+                        batch = left if f.get("multiple") else left[:1]
+                        loc.set_input_files(batch)
+                        used_files.update(batch)
+                        action = "uploaded " + ", ".join(Path(p).name for p in batch)
+                    else:
+                        action = "figures already uploaded" if plan.figures else "no separate figure files"
                 elif is_file:
                     path = plan.files.get(key)
                     if path and path not in used_files:
@@ -473,13 +616,15 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                 elif f["type"] == "radio":
                     if f["value"]:
                         action = "already answered (left unchanged)"
-                    elif ai_option and ai_option in (f.get("options") or []):
+                    elif (ai_option := ai_option or answer_question(f.get("bits") or [], f.get("options") or [],
+                                                                    plan.values)) in (f.get("options") or []):
                         k = f["options"].index(ai_option)
                         frame.locator(f'[data-jf-idx="{f["idx"]}"][data-jf-opt="{k}"]').check(force=True)
                         action = f"answered '{ai_option}'"
                     else:
                         action = "question (left for you)"
-                elif f["type"] == "select" and ai_option:
+                elif f["type"] == "select" and (ai_option := ai_option or answer_question(
+                        f.get("bits") or [], f.get("options") or [], plan.values)):
                     loc.select_option(label=ai_option, force=True)
                     action = f"selected '{ai_option}'"
                 elif key == "article_type":
@@ -516,9 +661,12 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             except Exception as e:
                 action = f"failed: {e}"
                 log(f"  could not fill {key}: {e}")
-            if f.get("required") and not f["value"].strip() and f["type"] != "file" and \
-                    not action.startswith(("filled", "uploaded", "selected", "ticked", "answered")):
+            done_ok = action.startswith(("filled", "uploaded", "selected", "ticked", "answered"))
+            if f.get("required") and not f["value"].strip() and f["type"] != "file" and not done_ok:
                 still_needed.append(_short_label(f))
+            if not done_ok and not f["value"].strip() and f["type"] != "file" and \
+                    (f.get("required") or "(left for you)" in action):
+                left_for_you += 1
             if report is not None:
                 via = " (AI)" if f["idx"] in ai else ""
                 report.append(f"  [{action}{via}] {f['type']} | {f['label'][:220]}")
@@ -532,7 +680,42 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
         log("  Still needed from you on this page: " + "; ".join(dict.fromkeys(still_needed)))
         if report is not None:
             report.append("  STILL NEEDED: " + "; ".join(dict.fromkeys(still_needed)))
+    plan.page_state = {
+        "filled": filled, "seen": seen, "left_for_you": left_for_you,
+        "needed": list(dict.fromkeys(still_needed)),
+        # People the page neither lists nor has boxes for yet: the autopilot may press "Add author".
+        "missing": {r: [people_mod.full_name(p) for p in people_mod.missing(plan.people, text, r, placed[r])]
+                    for r in ("author", "reviewer")},
+        "person_boxes": person_boxes,
+    }
+    if report is not None:
+        report.append(f"  SCORE: filled {filled}, left for you {left_for_you}")
     return filled
+
+
+def _fill_person(loc, f: dict, hit) -> str:
+    """One person box, from the author's records only. Never overwrites what is there."""
+    from . import people as people_mod
+
+    if f["value"].strip():
+        return "already has a value (left unchanged)"
+    if not hit:
+        return "person detail (left for you)"
+    who, attr = hit
+    name = people_mod.full_name(who) or "this person"
+    value = people_mod.value_for(who, attr)
+    if not value:
+        return f"no {attr} in the record of {name} (left for you)"
+    if f["type"] == "select":
+        opt = people_mod.pick_option(f.get("options") or [], attr, value)
+        if not opt:
+            return f"'{value}' is not in this list (left for you)"
+        loc.select_option(label=opt, force=True)
+        return f"selected '{opt}' ({attr} of {name})"
+    if f["type"] == "richtext":
+        return "person detail in a text editor (left for you)"
+    loc.fill(fit(value, attr, f.get("maxlength") or 0))
+    return f"filled {attr} of {name}"
 
 
 def _short_label(f: dict) -> str:
@@ -558,11 +741,16 @@ def fit(value: str, key: str, maxlength: int) -> str:
 
 
 PAGE_SIGNATURE_JS = """() => {
-  let n = 0;
-  const walk = (r) => { n += r.querySelectorAll('input, textarea, select, [contenteditable]').length;
+  let n = 0, names = '';
+  const walk = (r) => { r.querySelectorAll('input, textarea, select, [contenteditable]').forEach(e => {
+                          n++; names += (e.name || e.id || '') + ','; });
                         r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); }); };
   walk(document);
-  return location.href.split('#')[0] + ' ' + n;
+  const heads = [...document.querySelectorAll('h1, h2, h3, legend, .step.active, [aria-current="step"]')]
+    .map(h => (h.innerText || '').trim()).join('/').slice(0, 300);
+  let h = 0;
+  for (const c of names + heads) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return location.href.split('#')[0] + ' ' + n + ' ' + h;
 }"""
 
 
@@ -575,6 +763,33 @@ def page_signature(page) -> str:
         except Exception:
             continue
     return "|".join(parts)
+
+
+def write_score(package_dir: Path, url: str, state: dict) -> None:
+    """automation.json: per page, how many boxes the tool filled and how many it left for the author."""
+    path = package_dir / "automation.json"
+    try:
+        pages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pages = {}
+    key = url.split("#")[0]
+    old = pages.get(key, {})
+    filled = old.get("filled", 0) + state.get("filled", 0)  # pages are often filled in several passes
+    pages[key] = {"filled": filled, "left_for_you": state.get("left_for_you", 0),
+                  "needed": state.get("needed", [])}
+    path.write_text(json.dumps(pages, indent=2), encoding="utf-8")
+
+
+def automation_score(package_dir: Path) -> dict:
+    """Share of the form work the tool did on this submission so far."""
+    try:
+        pages = json.loads((package_dir / "automation.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"filled": 0, "left_for_you": 0, "percent": None, "pages": 0}
+    filled = sum(p.get("filled", 0) for p in pages.values())
+    left = sum(p.get("left_for_you", 0) for p in pages.values())
+    return {"filled": filled, "left_for_you": left, "pages": len(pages),
+            "percent": round(100 * filled / (filled + left)) if filled + left else None}
 
 
 def write_report(package_dir: Path, url: str, lines: list[str]) -> None:
@@ -611,3 +826,58 @@ def run(package_dir: Path, url: str | None = None) -> None:
             print(f"  {n} field(s) filled on this page." if n else "  Nothing to fill on this page.")
         ctx.close()
     print("Browser closed. If you did not click Submit, nothing was submitted.")
+
+
+class Driver:
+    """Watches the browser tab: fills each new form page once it has settled and, with the
+    autopilot on, moves on to the next step. Used by the app, the command line and the tests."""
+
+    def __init__(self, package_dir: Path, plan: Plan, log=print, mapper=None, autopilot: bool = True):
+        from .navigator import Autopilot
+
+        self.package_dir, self.plan, self.log, self.mapper = package_dir, plan, log, mapper
+        self.autopilot = autopilot
+        self.pilot = Autopilot(log=log)
+        self.uploaded: set[str] = set()  # never upload the same file twice in one session
+        self.last_sig = self.pending = ""
+        self.polls = 0
+
+    def fill(self, page, manual: bool = False) -> int:
+        report: list[str] = []
+        n = fill_page(page, self.plan, log=self.log, uploaded=self.uploaded, report=report, mapper=self.mapper)
+        if n or manual or not self.plan.pending_uploads:
+            write_report(self.package_dir, page.url, report)
+            write_score(self.package_dir, page.url, self.plan.page_state)
+        if n or manual:
+            self.log(f"{n} field(s) filled on this page." if n else "Nothing recognised to fill on this page.")
+        if manual:
+            self.last_sig = "" if self.plan.pending_uploads else page_signature(page)
+        return n
+
+    def resume(self) -> None:
+        self.pilot.paused_sig = self.last_sig = self.pending = ""
+        self.log("Autopilot resumed.")
+
+    def tick(self, page) -> str:
+        """One look at the page. Returns what happened ('filled', 'next', 'paused', ...)."""
+        sig = page_signature(page)
+        if not sig:
+            return "no page"
+        if sig != self.last_sig:
+            # Fill once the new page has stopped changing for one look.
+            if sig == self.pending:
+                self.polls += 1
+            else:
+                self.pending, self.polls = sig, 0
+            if self.polls < 1:
+                return "settling"
+            self.fill(page)
+            # Files still to upload: come back to this page, don't wait for it to change.
+            self.last_sig = "" if self.plan.pending_uploads else page_signature(page)
+            if not (self.autopilot and self.last_sig):
+                return "filled"
+            page.wait_for_timeout(1200)  # let the site register what was typed
+            return self.pilot.after_fill(page, self.plan, self.last_sig)
+        if self.autopilot:
+            return self.pilot.check_stuck(page, sig) or "waiting"
+        return "waiting"

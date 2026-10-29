@@ -1,0 +1,25 @@
+<html><head><script src="common.js"></script></head><body>
+<h2>Step 2: Authors</h2>
+<div id="err" class="error"></div>
+<table id="authors"><tr><th>Author</th><th>Email</th></tr>
+<tr><td>Yousuf, Irfan (Corresponding)</td><td>irfan@uni.example</td></tr></table>
+<div id="blocks"></div>
+<script>
+let n = 0;
+function addBlock() {
+  n++;
+  const d = document.createElement('fieldset');
+  d.innerHTML = `<legend>Co-author ${n}</legend>
+    <div><label for="g${n}">First Name *</label><input id="g${n}" name="given${n}" required></div>
+    <div><label for="f${n}">Last Name *</label><input id="f${n}" name="family${n}" required></div>
+    <div><label for="e${n}">E-mail *</label><input id="e${n}" name="email${n}" required></div>
+    <div><label for="i${n}">Institution</label><input id="i${n}" name="inst${n}"></div>
+    <div><label for="c${n}">Country / Region</label><select id="c${n}" name="country${n}"><option>Select</option><option>India</option><option>United States</option><option>United Kingdom</option></select></div>
+    <div><label for="o${n}">ORCID iD</label><input id="o${n}" name="orcid${n}"></div>`;
+  document.getElementById('blocks').appendChild(d);
+}
+</script>
+<button onclick="addBlock()">Add Co-Author</button>
+<button onclick="mark('deleted')">Delete Author</button>
+<button onclick="next('step3.html', () => n < 2 ? 'Please add all co-authors' : required(['given1','family1','email1','given2','family2','email2']))">Save &amp; Continue</button>
+</body></html>

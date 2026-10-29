@@ -223,6 +223,7 @@ class Assistant:
         self.log: list[str] = []
         self.active = False
         self.auto = True  # fill each new form page automatically
+        self.autopilot = True  # also press Next / Add author (never Submit) and stop at the review page
         self.thread: threading.Thread | None = None
 
     def start(self, package: str, url: str) -> None:
@@ -238,10 +239,9 @@ class Assistant:
         try:
             from playwright.sync_api import sync_playwright
 
-            from .submit.assistant import fill_page, load_plan, page_signature, write_report
+            from .submit.assistant import Driver, load_plan
 
             plan, _ = load_plan(package)
-            uploaded: set[str] = set()  # files already uploaded in this session
             mapper = None
             try:
                 from .submit.ai_mapper import make_mapper
@@ -251,24 +251,17 @@ class Assistant:
             except Exception:
                 self.log.append("No AI key set: using built-in rules to recognise form boxes.")
             config.ensure_data_dir()
-
-            def fill(page, manual: bool) -> None:
-                report: list[str] = []
-                n = fill_page(page, plan, log=self.log.append, uploaded=uploaded, report=report, mapper=mapper)
-                if n or manual or not plan.pending_uploads:
-                    write_report(package, page.url, report)
-                if n or manual:
-                    self.log.append(f"{n} field(s) filled on this page." if n else
-                                    "Nothing recognised to fill on this page.")
+            driver = Driver(package, plan, log=self.log.append, mapper=mapper, autopilot=self.autopilot)
 
             with sync_playwright() as pw:
-                ctx = pw.chromium.launch_persistent_context(  # visible: you log in and click the buttons
+                ctx = pw.chromium.launch_persistent_context(  # visible: you log in and check every page
                     str(config.BROWSER_PROFILE), headless=os.environ.get("JOURNALFIT_HEADLESS") == "1")
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 page.goto(url)
-                self.log.append("Browser opened. Log in and start a new submission. Each form page is "
-                                "filled automatically when it appears; you click Next/Continue and Submit.")
-                last_sig, pending, polls = "", "", 0
+                self.log.append("Browser opened. Log in and start a new submission. Each form page is then "
+                                "filled automatically" + (" and the tool moves on to the next step by itself. It "
+                                "stops at the review page: you check it and click Submit." if self.autopilot else
+                                "; you click Next/Continue and Submit."))
                 while True:
                     try:
                         cmd, arg = self.q.get(timeout=1.5)
@@ -278,23 +271,15 @@ class Assistant:
                         break
                     try:
                         page = ctx.pages[-1]  # portals often open the form in a new tab
+                        driver.autopilot = self.autopilot
                         if cmd == "goto":
                             page.goto(arg)
+                        elif cmd == "resume":  # the author fixed the page: fill again and carry on
+                            driver.resume()
                         elif cmd == "fill":
-                            fill(page, manual=True)
-                            last_sig = "" if plan.pending_uploads else page_signature(page)
+                            driver.fill(page, manual=True)
                         elif cmd == "watch" and self.auto:
-                            sig = page_signature(page)
-                            # Fill once the new page has stopped changing for one poll.
-                            if sig and sig != last_sig:
-                                if sig == pending:
-                                    polls += 1
-                                else:
-                                    pending, polls = sig, 0
-                                if polls >= 1:
-                                    fill(page, manual=False)
-                                    # Files still to upload: come back to this page, don't wait for it to change.
-                                    last_sig = "" if plan.pending_uploads else page_signature(page)
+                            driver.tick(page)
                     except Exception as e:
                         if cmd != "watch":
                             self.log.append(f"Problem: {e}")
@@ -431,7 +416,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "unknown job"}, 404)
             return self._json({"status": job.status, "log": job.log, "result": job.result, "error": job.error})
         if u.path == "/api/assist/log":
-            return self._json({"active": ASSISTANT.active, "log": ASSISTANT.log})
+            from .submit.assistant import automation_score
+
+            pkg = parse_qs(u.query).get("package", [""])[0]
+            score = automation_score(Path(pkg)) if pkg and OUTPUT_DIR.resolve() in Path(pkg).resolve().parents else None
+            return self._json({"active": ASSISTANT.active, "log": ASSISTANT.log, "autopilot": ASSISTANT.autopilot,
+                               "score": score})
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -491,6 +481,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if u.path == "/api/assist/auto":
                 ASSISTANT.auto = bool(body.get("on"))
+                return self._json({"ok": True})
+            if u.path == "/api/assist/resume":
+                if not ASSISTANT.active:
+                    raise ValueError("Open the submission website first.")
+                ASSISTANT.q.put(("resume", None))
+                return self._json({"ok": True})
+            if u.path == "/api/assist/autopilot":
+                ASSISTANT.autopilot = bool(body.get("on"))
                 return self._json({"ok": True})
             if u.path == "/api/assist/stop":
                 ASSISTANT.q.put(("stop", None))

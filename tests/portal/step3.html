@@ -1,0 +1,17 @@
+<html><head><script src="common.js"></script></head><body>
+<h2>Step 3: Reviewers</h2>
+<div id="err" class="error"></div>
+<h3>Suggested Reviewers</h3>
+<fieldset><legend>Suggested Reviewer 1</legend>
+  <div><label for="r1g">First Name *</label><input id="r1g" name="r1given"></div>
+  <div><label for="r1f">Last Name *</label><input id="r1f" name="r1family"></div>
+  <div><label for="r1e">Email *</label><input id="r1e" name="r1email"></div>
+  <div><label for="r1i">Institution</label><input id="r1i" name="r1inst"></div>
+  <div><label for="r1r">Reason for suggesting this reviewer</label><textarea id="r1r" name="r1reason"></textarea></div>
+</fieldset>
+<fieldset><legend>Opposed Reviewers</legend>
+  <div><label for="o1g">First Name</label><input id="o1g" name="opgiven"></div>
+  <div><label for="o1e">Email</label><input id="o1e" name="opemail"></div>
+</fieldset>
+<button onclick="next('step4.html', () => required(['r1given','r1family','r1email']))">Save &amp; Continue</button>
+</body></html>

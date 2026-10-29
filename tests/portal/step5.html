@@ -1,0 +1,20 @@
+<html><head><script src="common.js"></script></head><body>
+<h2>Step 5: File Upload</h2>
+<div id="err" class="error"></div>
+<table id="list"></table>
+<div><label for="it">Item Type</label><select id="it" name="itemtype"><option>Select Item Type</option><option>Manuscript</option><option>Cover Letter</option><option>Title Page</option><option>Figure</option><option>Supplementary Material</option></select></div>
+<div><label for="up">Item Type file</label><input id="up" type="file" name="upload"></div>
+<script>
+const got = [];
+document.getElementById('up').addEventListener('change', (e) => {
+  const t = document.getElementById('it').value;
+  for (const f of e.target.files) { got.push(t + ':' + f.name);
+    document.getElementById('list').insertAdjacentHTML('beforeend', `<tr><td>${t}</td><td>${f.name}</td></tr>`); }
+  localStorage.setItem('files', got.join('|'));
+  e.target.value = '';
+  document.getElementById('it').selectedIndex = 0;
+});
+</script>
+<button onclick="mark('browse')">Browse...</button>
+<button onclick="next('review.html', () => got.some(g => g.startsWith('Manuscript:')) ? '' : 'Please upload the manuscript')">Next</button>
+</body></html>
