@@ -168,7 +168,7 @@ def cmd_prepare(a, ms=None, cand=None, claude=None):
     from . import settings
 
     out = build_package(ms, cand, claude, _author(a), Path(a.out) / _stem(ms.path), supplements=supplements,
-                        declarations={**ms.declarations, **settings.declarations()}, log=console.print)
+                        declarations={**settings.declarations(), **ms.declarations}, log=console.print)
     console.print(f"Package: {out}\n  checklist.md · cover_letter.docx · title_page.docx · authors.json · "
                   "reviewers.json · metadata.json · manuscript copy\n  Check authors.json, and add emails to "
                   "reviewers.json for the reviewers you want to suggest.")

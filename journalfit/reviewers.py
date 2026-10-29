@@ -20,7 +20,9 @@ from .submit import people
 API = "https://api.openalex.org"
 MIN_WORKS = 15  # papers in OpenAlex
 MIN_H = 6  # h-index
-FIELDS = "id,doi,title,publication_year,authorships,primary_location"
+FIELDS = "id,doi,title,publication_year,authorships,primary_location,abstract_inverted_index"
+# Text similarity to the manuscript (title + abstract), relative to the closest paper found.
+RELATIVE_SIMILARITY = 0.35
 
 
 def _params(**kw) -> dict:
@@ -98,10 +100,25 @@ def _indexed_issns() -> set[str] | None:
     return {re.sub(r"[^0-9X]", "", k.upper()) for k in keys} or None
 
 
+def closest(found: list[dict], summary: str, keep: int = 60) -> list[dict]:
+    """The papers really about the same thing as the manuscript, closest first."""
+    if not summary or not found:
+        return found
+    from .similarity import tfidf_similarities
+    from .sources.openalex import _abstract
+
+    docs = [(w.get("title") or "") + " " + _abstract(w.get("abstract_inverted_index")) for w in found]
+    sims = tfidf_similarities(summary, docs)
+    ranked = sorted(zip(sims, range(len(found))), key=lambda t: -t[0])
+    floor = RELATIVE_SIMILARITY * float(ranked[0][0]) if ranked else 0.0
+    return [dict(found[i], _sim=float(sv) / (float(ranked[0][0]) or 1.0)) for sv, i in ranked[:keep]
+            if sv > 0 and sv >= floor]
+
+
 def suggest(http: HttpClient, queries: list[str], authors: list[dict], n: int = 6, years: int = 5,
-            journal_name: str = "") -> list[dict]:
+            journal_name: str = "", summary: str = "") -> list[dict]:
     """Up to n reviewer suggestions with the papers that make them a good fit (no emails)."""
-    found = works(http, queries, years, indexed=_indexed_issns())
+    found = closest(works(http, queries, years, indexed=_indexed_issns()), summary)
     my_insts = {_inst_key(a.get("institution", "")) for a in authors if a.get("institution")}
     # People who wrote with any of the authors in these papers are not independent.
     linked: set[str] = set()
@@ -128,7 +145,8 @@ def suggest(http: HttpClient, queries: list[str], authors: list[dict], n: int = 
                                           "score": 0.0})
             # Closer papers count more; a senior (last or corresponding) author counts more.
             position = a.get("author_position")
-            entry["score"] += 1.0 / (1 + rank / 10) * (1.3 if position == "last" or a.get("is_corresponding") else 1.0)
+            closeness = w.get("_sim", 1.0 / (1 + rank / 10))
+            entry["score"] += closeness * (1.3 if position == "last" or a.get("is_corresponding") else 1.0)
             papers[aid].append({"title": w.get("title") or "", "year": w.get("publication_year"),
                                 "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
                                 "journal": (((w.get("primary_location") or {}).get("source")) or {}).get("display_name", "")})

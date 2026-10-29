@@ -58,9 +58,8 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
     made = make_files(ms, out, guide, llm, author, declarations, authors, say)
     if reviewers is None:
         reviewers = suggest_reviewers(ms, cand, made["authors"], guide, http, say)
-    from .submit import people
-
-    people.save(out, "reviewers.json", reviewers)
+    # Kept with their papers and record, for the author to judge (people.load reads what forms need).
+    (out / "reviewers.json").write_text(json.dumps(reviewers, indent=2, ensure_ascii=False), encoding="utf-8")
 
     metadata = {
         "journal": j.name, "publisher": j.publisher, "issn": j.issns,
@@ -162,10 +161,11 @@ def suggest_reviewers(ms: Manuscript, cand: Candidate, team: list[dict], guide: 
     from . import reviewers as reviewers_mod
     from .http import HttpClient
 
-    queries = (ms.search_queries or [])[:3] or [ms.title]
+    queries = [ms.title] + (ms.search_queries or [])[:4]
     want = max(int(guide.get("suggested_reviewers") or 0), 5)
     try:
-        found = reviewers_mod.suggest(http or HttpClient(), queries, team, n=want, journal_name=cand.journal.name)
+        found = reviewers_mod.suggest(http or HttpClient(), queries, team, n=want, journal_name=cand.journal.name,
+                                      summary=ms.summary_text())
     except Exception as e:
         say(f"Could not suggest reviewers ({e}).")
         return []
