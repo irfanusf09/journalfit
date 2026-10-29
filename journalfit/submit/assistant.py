@@ -70,14 +70,73 @@ COLLECT_JS = r"""
     r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
   };
   walk(document);
+  const groups = new Map();  // radio buttons are one question per name
   for (const el of all) {
     const tag = el.tagName.toLowerCase();
+    const itype = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && (itype === 'checkbox' || itype === 'radio')) {
+      if (el.disabled || !visible(el.closest('label') || el.parentElement || el)) continue;
+      // A tick box is described by its own label and the nearest sentence before it, never by neighbours.
+      const own = el.closest('label') ? txt(el.closest('label')) :
+        (el.id && rootOf(el).querySelector && rootOf(el).querySelector(`label[for="${CSS.escape(el.id)}"]`)
+          ? txt(rootOf(el).querySelector(`label[for="${CSS.escape(el.id)}"]`)) : (el.getAttribute('aria-label') || ''));
+      let near = '', node = el.closest('label') || el;
+      for (let depth = 0; depth < 4 && node && !near; depth++) {
+        let sib = node.previousElementSibling, hops = 0;
+        while (sib && hops < 2 && !near) {
+          if (!sib.querySelector('input') && !sib.matches('input, style, script') && txt(sib)) near = txt(sib).slice(0, 200);
+          sib = sib.previousElementSibling; hops++;
+        }
+        node = node.parentElement;
+      }
+      const bits = [own, near].filter(Boolean).map(t => t.slice(0, 200));
+      if (itype === 'checkbox') {
+        el.setAttribute('data-jf-idx', String(idx));
+        out.push({idx: idx++, type: 'checkbox', tag, bits, label: bits.join(' | '), value: el.checked ? 'checked' : '',
+                  required: !!el.required || el.getAttribute('aria-required') === 'true' || /\*|required/i.test(bits.slice(0, 2).join(' ')),
+                  visible: true, options: [], maxlength: 0, multiple: false});
+      } else {
+        const name = el.name || ('anon' + idx);
+        let g = groups.get(name);
+        if (!g) {
+          // The question is the text before the group, not each button's own label.
+          const box = el.closest('fieldset, tr, li, .form-group, .question, div') || el.parentElement;
+          g = {idx: idx++, type: 'radio', tag, bits: [], label: '', value: '', required: false, visible: true,
+               options: [], maxlength: 0, multiple: false, _box: box};
+          groups.set(name, g);
+          out.push(g);
+        }
+        el.setAttribute('data-jf-idx', String(g.idx));
+        el.setAttribute('data-jf-opt', String(g.options.length));
+        g.options.push(bits[0] || el.value || '');
+        if (el.checked) g.value = bits[0] || el.value || 'chosen';
+        g.required = g.required || !!el.required;
+        if (!g.bits.length) {
+          let q = [], node = el;
+          for (let depth = 0; depth < 6 && node && q.length < 2; depth++) {
+            let sib = node.previousElementSibling, hops = 0;
+            while (sib && hops < 3) {
+              if (!sib.querySelector('input') && txt(sib)) { q.push(txt(sib).slice(0, 200)); break; }
+              sib = sib.previousElementSibling; hops++;
+            }
+            node = node.parentElement;
+          }
+          const fs = el.closest('fieldset'); if (fs && fs.querySelector('legend')) q.unshift(txt(fs.querySelector('legend')));
+          g.bits = q.length ? q : [el.name || 'question'];
+          g.label = g.bits.join(' | ');
+          g.required = g.required || /\*|required/i.test(g.label);
+        }
+      }
+      continue;
+    }
     const rich = el.isContentEditable && tag !== 'input' && tag !== 'textarea';
     if (rich && el.parentElement && el.parentElement.closest('[contenteditable="true"]')) continue;
     const type = rich ? 'richtext' : tag === 'select' ? 'select' : (el.getAttribute('type') || tag).toLowerCase();
     if (['hidden', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio', 'password', 'search'].includes(type)) continue;
     if (el.disabled || el.readOnly) continue;
-    if (type !== 'file' && !visible(el)) continue;
+    const shown = visible(el);
+    // Lists are kept even when hidden behind a custom-styled drop-down (the site reads the real list).
+    if (type !== 'file' && type !== 'select' && !shown) continue;
     el.setAttribute('data-jf-idx', String(idx));
     let value = el.value || '';
     if (rich) value = txt(el);
@@ -86,9 +145,10 @@ COLLECT_JS = r"""
     const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
       /\*|required/i.test(bits.slice(0, 2).join(' '));
     out.push({idx: idx++, type, tag, bits, label: bits.join(' | '), value, multiple: !!el.multiple,
-              maxlength: el.maxLength > 0 ? el.maxLength : 0, required,
+              maxlength: el.maxLength > 0 ? el.maxLength : 0, required, visible: shown,
               options: tag === 'select' ? [...el.options].map(o => txt(o)) : []});
   }
+  out.forEach(f => { delete f._box; });
   return out;
 }
 """
@@ -121,6 +181,7 @@ class Plan:
     files: dict[str, str]
     supplements: list[str] = field(default_factory=list)
     last_upload: float = 0.0  # when the last file was handed to the site
+    pending_uploads: bool = False  # files still waiting to go up on an item-type page
 
 
 def running_title(title: str) -> str:
@@ -151,6 +212,8 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
         "data_availability": decl.get("data_availability", ""),
         "ethics": decl.get("ethics", ""),
         "author_contributions": decl.get("author_contributions", ""),
+        # Standard confirmations, only if the author switched them on.
+        "confirm": STANDARD_CONFIRMATIONS if decl.get("confirm_standard") else "",
     })
     manuscript = next(package_dir.glob("manuscript.*"), None)
     files = {
@@ -165,6 +228,10 @@ def load_plan(package_dir: Path) -> tuple[Plan, dict]:
 PERSON_FIELD = re.compile(r"author(?!s?'?\s*contribution)|salutation|prefix|honorific|first[\s_-]*name|"
                           r"last[\s_-]*name|given[\s_-]*name|family[\s_-]*name|surname|job|position|degree|"
                           r"reviewer|e-?mail|institution|department|affiliation|orcid|phone", re.I)
+STANDARD_CONFIRMATIONS = (
+    "The work is original and not published elsewhere; it is not under consideration at another "
+    "journal; all co-authors have approved the submission; the author agrees to the journal's "
+    "policies, terms and ethical guidelines.")
 DECLARATIONS = ("competing_interests", "funding_statement", "data_availability", "ethics", "author_contributions")
 
 
@@ -214,6 +281,23 @@ ITEM_TYPES = [  # (file key, option pattern) in upload order
     ("cover_letter_file", re.compile(r"cover\s*letter", re.I)),
     ("supplementary_file", re.compile(r"supplement|supporting|electronic\s+supplementary", re.I)),
 ]
+# Extra files are typed by their name: Figure1.tif -> "Figure", Table2.docx -> "Table", ...
+FILE_KINDS = [
+    (re.compile(r"title[\s_-]*page", re.I), re.compile(r"title\s*page", re.I)),
+    (re.compile(r"(^|[\s_-])(fig|figure)s?[\s_-]*\d*", re.I), re.compile(r"^\s*figures?\s*$|^\s*figure\b(?!.*caption)", re.I)),
+    (re.compile(r"(^|[\s_-])tab(le)?s?[\s_-]*\d*", re.I), re.compile(r"^\s*tables?\s*$", re.I)),
+    (re.compile(r"highlight", re.I), re.compile(r"highlight", re.I)),
+    (re.compile(r"graphical[\s_-]*abstract", re.I), re.compile(r"graphical\s+abstract", re.I)),
+]
+
+
+def _supplement_pattern(path: str, options: list[str]):
+    """Item type for an extra file: by its name when the list has that type, else supplementary material."""
+    name = Path(path).stem
+    for name_rx, option_rx in FILE_KINDS:
+        if name_rx.search(name) and any(option_rx.search(o) for o in options):
+            return option_rx
+    return ITEM_TYPES[2][1]
 
 
 def _is_item_type_list(f: dict) -> bool:
@@ -237,9 +321,15 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
     if not lists or not inputs:
         return None
     pending = []
+    options = lists[0].get("options") or []
     for key, pattern in ITEM_TYPES:
-        paths = plan.supplements if key == "supplementary_file" else [plan.files.get(key)]
-        pending += [(p, pattern) for p in paths if p and p not in used]
+        if key == "supplementary_file":
+            pending += [(p, _supplement_pattern(p, options)) for p in plan.supplements if p not in used]
+        else:
+            p = plan.files.get(key)
+            if p and p not in used:
+                pending.append((p, pattern))
+    plan.pending_uploads = bool(pending)
     if not pending:
         return "all files already uploaded"
     import time
@@ -255,7 +345,7 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
     def choose(lst: dict, pattern) -> str | None:
         choice = next((o for o in lst.get("options") or [] if pattern.search(o)), None)
         if choice:
-            frame.locator(f'[data-jf-idx="{lst["idx"]}"]').select_option(label=choice)
+            frame.locator(f'[data-jf-idx="{lst["idx"]}"]').select_option(label=choice, force=True)
         return choice
 
     done = []
@@ -272,6 +362,7 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
             return "no matching file types in the list (left for you)"
         plan.last_upload = time.time()
         left = len(pending) - len(done)
+        plan.pending_uploads = left > 0
         return ("chose item type and attached " + "; ".join(done)
                 + ". Click the site's upload button if it has one"
                 + (f"; {left} more file(s) need another row" if left else ""))
@@ -286,16 +377,20 @@ def upload_with_item_type(frame, fields: list[dict], plan: Plan, used: set[str])
     frame.locator(f'[data-jf-idx="{target["idx"]}"]').set_input_files(path)
     used.add(path)
     plan.last_upload = time.time()
+    plan.pending_uploads = len(pending) > 1
     left = len(pending) - 1
     return (f"chose item type '{choice}' and uploaded {Path(path).name}"
             + (f"; {left} more file(s) will follow after the site finishes this upload" if left else ""))
 
 
-def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: list | None = None) -> int:
+def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: list | None = None,
+              mapper=None) -> int:
     """Fill every recognised field on the current page. Never clicks buttons.
 
     `uploaded` remembers files already uploaded in this session (so automatic filling doesn't
     upload them again); `report` receives one line per field seen, for troubleshooting.
+    `mapper` (optional, see ai_mapper) lets the AI decide which prepared item goes in which box;
+    the built-in label rules are used where it gives no answer.
     """
     filled = 0
     used_files: set[str] = uploaded if uploaded is not None else set()
@@ -315,17 +410,33 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             done = f"upload failed: {e}"
         if done is not None:
             saw_file_input = supplements_done = True  # this page's files are handled one by one
-            log(f"  {done}")
+            if not done.startswith("waiting"):
+                log(f"  {done}")
             if done.startswith("chose item type"):
                 filled += 1
             if report is not None:
                 report.append(f"  [{done}]")
+        ai: dict = {}
+        if mapper is not None:
+            askable = [f for f in fields if f["type"] != "file" and not _is_item_type_list(f)
+                       and (f.get("visible", True) or f["type"] == "select")]
+            try:
+                ai = mapper(askable, plan.values) or {}
+            except Exception as e:
+                log(f"  AI couldn't read this page ({e}); using the built-in rules")
         for f in fields:
             if done is not None and (f["type"] == "file" or _is_item_type_list(f)):
                 continue
+            if f["type"] == "select" and not f.get("visible", True) and f["idx"] not in ai:
+                continue  # hidden lists are only used for file types or when the AI picks an option
             is_file = f["type"] == "file"
             saw_file_input |= is_file
             key = match_bits(f.get("bits") or [f["label"]], is_file)
+            ai_option = None
+            if f["idx"] in ai and not is_file:
+                ai_key, ai_option = ai[f["idx"]]
+                person = any(PERSON_FIELD.search(w) for w in map(words_of, (f.get("bits") or [])[:4]))
+                key = None if person else ai_key  # hard rule: person fields are never filled
             action = "not recognised"
             loc = frame.locator(f'[data-jf-idx="{f["idx"]}"]')
             try:
@@ -351,13 +462,33 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                         action = "file already uploaded" if path else "no file for it"
                 elif f["value"].strip():
                     action = "already has a value (left unchanged)"
+                elif f["type"] == "checkbox":
+                    if f["value"]:
+                        action = "already ticked (left unchanged)"
+                    elif key == "confirm" and plan.values.get("confirm"):
+                        loc.check(force=True)
+                        action = "ticked (standard confirmation)"
+                    else:
+                        action = "tick box (left for you)"
+                elif f["type"] == "radio":
+                    if f["value"]:
+                        action = "already answered (left unchanged)"
+                    elif ai_option and ai_option in (f.get("options") or []):
+                        k = f["options"].index(ai_option)
+                        frame.locator(f'[data-jf-idx="{f["idx"]}"][data-jf-opt="{k}"]').check(force=True)
+                        action = f"answered '{ai_option}'"
+                    else:
+                        action = "question (left for you)"
+                elif f["type"] == "select" and ai_option:
+                    loc.select_option(label=ai_option, force=True)
+                    action = f"selected '{ai_option}'"
                 elif key == "article_type":
                     if f["type"] != "select":
                         action = "article type is not a list (left for you)"
                     else:
                         choice = pick_article_type(f.get("options") or [], plan.values.get("article_type", ""))
                         if choice:
-                            loc.select_option(label=choice)
+                            loc.select_option(label=choice, force=True)
                             action = f"selected '{choice}'"
                         else:
                             action = "article type unclear (left for you)"
@@ -379,17 +510,18 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                     else:
                         loc.fill(value)
                         action = f"filled {key}"
-                if action.startswith(("filled", "uploaded", "selected")):
+                if action.startswith(("filled", "uploaded", "selected", "ticked", "answered")):
                     filled += 1
                     log(f"  {action}  ->  {f['label'][:70]}")
             except Exception as e:
                 action = f"failed: {e}"
                 log(f"  could not fill {key}: {e}")
             if f.get("required") and not f["value"].strip() and f["type"] != "file" and \
-                    not action.startswith(("filled", "uploaded", "selected")):
+                    not action.startswith(("filled", "uploaded", "selected", "ticked", "answered")):
                 still_needed.append(_short_label(f))
             if report is not None:
-                report.append(f"  [{action}] {f['type']} | {f['label'][:220]}")
+                via = " (AI)" if f["idx"] in ai else ""
+                report.append(f"  [{action}{via}] {f['type']} | {f['label'][:220]}")
     if saw_file_input and plan.supplements and not supplements_done and \
             not all(p in used_files for p in plan.supplements):
         folder = Path(plan.supplements[0]).parent

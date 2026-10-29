@@ -111,7 +111,9 @@ def _checklist(ms: Manuscript, cand: Candidate, guide: dict, supplements: list[s
         from .settings import DECLARATION_FIELDS
 
         lines += ["", "## Your declarations (used in the cover letter and the submission forms)"]
-        lines += [f"- {DECLARATION_FIELDS.get(k, k)}: {v}" for k, v in declarations.items()]
+        lines += [f"- {DECLARATION_FIELDS.get(k, k)}: {v}" for k, v in declarations.items() if k in DECLARATION_FIELDS]
+        if declarations.get("confirm_standard"):
+            lines.append("- Standard author confirmations: you asked the tool to tick these on the journal's site")
     else:
         lines += ["", "Tip: add your declarations (competing interests, funding, data availability...) "
                       "in Settings and they'll be filled in for you."]

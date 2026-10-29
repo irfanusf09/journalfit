@@ -310,7 +310,8 @@ class LLM:
                "in a cover letter (use [placeholders] for facts not given, e.g. whether a preprint exists):\n"
                + "\n".join(f"- {r}" for r in needs) + "\n" if needs else "")
             + ("The authors' own declarations, to use word for word (no placeholders for these):\n"
-               + "\n".join(f"- {k.replace('_', ' ')}: {v}" for k, v in declarations.items()) + "\n"
+               + "\n".join(f"- {k.replace('_', ' ')}: {v}" for k, v in declarations.items()
+                           if isinstance(v, str)) + "\n"
                if declarations else "")
             + "\n"
             "Plain text, under 350 words: address the Editor-in-Chief (use 'Dear Editor' if the name "

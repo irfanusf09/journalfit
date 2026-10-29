@@ -144,9 +144,14 @@
         <span class="muted">Typical submission-to-acceptance time. A better speed test than first decision, which mostly reflects desk rejections.</span></div>
       <div class="field"><label for="min_acceptance">Acceptance rate at least (%)</label>
         <input type="number" id="min_acceptance" value="20" min="0" max="100"></div>
-      <div class="field"><label for="min_quartile">Journal quality at least</label>
-        <select id="min_quartile"><option value="">Any</option><option>Q1</option><option selected>Q2</option>
-          <option>Q3</option><option>Q4</option></select></div>
+      <div class="field"><label>Journal quality (Scopus quartile)</label>
+        <div class="row" style="margin-top:2px;gap:16px" id="quartiles">
+          <label class="check"><input type="checkbox" value="Q1" checked> Q1</label>
+          <label class="check"><input type="checkbox" value="Q2" checked> Q2</label>
+          <label class="check"><input type="checkbox" value="Q3"> Q3</label>
+          <label class="check"><input type="checkbox" value="Q4"> Q4</label>
+        </div>
+        <span class="muted">Tick any combination, e.g. only Q2, or Q1 and Q3.</span></div>
       <div class="field"><label for="publishers">Only these publishers (optional)</label>
         <input type="text" id="publishers" placeholder="e.g. Springer, Elsevier"></div>
     </div>
@@ -207,6 +212,32 @@
   </section>
 </main>
 
+<dialog id="paperDialog">
+  <h2 style="margin-top:0">About this paper</h2>
+  <p class="muted">These answers go into the cover letter, the checklist and the journal's forms exactly as written,
+    so nothing is guessed. They're remembered for next time; change whatever differs for this paper.</p>
+  <div class="field"><label for="d_competing_interests">Competing interests</label>
+    <textarea id="d_competing_interests" rows="2" placeholder="e.g. The authors declare no competing interests."></textarea></div>
+  <div class="field"><label for="d_funding">Funding</label>
+    <textarea id="d_funding" rows="2" placeholder="e.g. This research received no specific grant from any funding agency."></textarea></div>
+  <div class="field"><label for="d_ethics">Ethics approval / consent</label>
+    <textarea id="d_ethics" rows="2" placeholder="e.g. Not applicable: the study uses public country-level data."></textarea></div>
+  <div class="field"><label for="d_data_availability">Data availability</label>
+    <textarea id="d_data_availability" rows="2" placeholder="e.g. All data are publicly available from the World Bank WDI."></textarea></div>
+  <div class="field"><label for="d_preprint">Preprint</label>
+    <textarea id="d_preprint" rows="1" placeholder="e.g. This manuscript has not been posted on a preprint server."></textarea></div>
+  <div class="field"><label for="d_author_contributions">Author contributions</label>
+    <textarea id="d_author_contributions" rows="2" placeholder="e.g. I.Y.: conceptualisation, data, analysis, writing."></textarea></div>
+  <label class="check"><input type="checkbox" id="d_confirm_standard">
+    <span>Tick standard author confirmations for me on the journal's site<br>
+    <span class="muted">The work is original and not published elsewhere, not under review at another journal, all
+      co-authors approved the submission, and I agree to the journal's policies. Other tick boxes are left for you.</span></span></label>
+  <div class="row" style="justify-content:flex-end">
+    <button onclick="document.getElementById('paperDialog').close()">Cancel</button>
+    <button class="primary" id="paperContinue">Continue</button>
+  </div>
+</dialog>
+
 <dialog id="settings">
   <h2 style="margin-top:0">Settings</h2>
   <div class="field"><label for="s_provider">AI provider</label>
@@ -219,21 +250,6 @@
   <div class="field"><label for="s_name">Your name (for the cover letter)</label><input type="text" id="s_name"></div>
   <div class="field"><label for="s_aff">Your affiliation</label><input type="text" id="s_aff"></div>
   <div class="field"><label for="s_email">Your email</label><input type="text" id="s_email"></div>
-  <details id="declBox"><summary><b>Declarations</b> <span class="muted">used in cover letters and submission forms, so there are no placeholders</span></summary>
-    <p class="muted">Write each exactly as you want it to appear. Leave a box empty to be asked on the journal's site instead.</p>
-    <div class="field"><label for="d_competing_interests">Competing interests</label>
-      <textarea id="d_competing_interests" rows="2" placeholder="e.g. The authors declare no competing interests."></textarea></div>
-    <div class="field"><label for="d_funding">Funding</label>
-      <textarea id="d_funding" rows="2" placeholder="e.g. This research received no specific grant from any funding agency."></textarea></div>
-    <div class="field"><label for="d_data_availability">Data availability</label>
-      <textarea id="d_data_availability" rows="2" placeholder="e.g. All data are publicly available from the World Bank WDI."></textarea></div>
-    <div class="field"><label for="d_ethics">Ethics approval / consent</label>
-      <textarea id="d_ethics" rows="2" placeholder="e.g. Not applicable: the study uses public country-level data."></textarea></div>
-    <div class="field"><label for="d_preprint">Preprint</label>
-      <textarea id="d_preprint" rows="1" placeholder="e.g. This manuscript has not been posted on a preprint server."></textarea></div>
-    <div class="field"><label for="d_author_contributions">Author contributions</label>
-      <textarea id="d_author_contributions" rows="2" placeholder="e.g. I.Y.: conceptualisation, data, analysis, writing."></textarea></div>
-  </details>
   <p class="muted">Saved only on this computer. Results are saved in <span id="outDir"></span>.</p>
   <div class="row" style="justify-content:space-between">
     <button id="updateBtn">Check for updates</button>
@@ -350,7 +366,8 @@ $("findBtn").onclick = async () => {
     no_oa: $("no_oa").checked, scopus: $("scopus").checked, skip_missing: $("skip_missing").checked,
     max_first_decision: $("max_first_decision").value, min_acceptance: $("min_acceptance").value,
     max_acceptance_days: $("max_acceptance_days").value,
-    min_quartile: $("min_quartile").value, publishers: $("publishers").value,
+    quartiles: [...document.querySelectorAll("#quartiles input:checked")].map(i => i.value),
+    publishers: $("publishers").value,
   };
   try {
     const {job} = await api("/api/find", {manuscript: manuscript.path, criteria, use_ai: $("use_ai").checked});
@@ -435,14 +452,30 @@ function showResults(r) {
   $("excludedBox").classList.toggle("hidden", !r.excluded.length);
 }
 
-async function prepare(index, name) {
+function prepare(index, name) {
+  const d = (state.settings || {}).declarations || {};
+  DECL.forEach(k => $("d_" + k).value = d[k] || "");
+  $("d_confirm_standard").checked = !!d.confirm_standard;
+  $("paperContinue").onclick = async () => {
+    const declarations = Object.fromEntries(DECL.map(k => [k, $("d_" + k).value.trim()]));
+    declarations.confirm_standard = $("d_confirm_standard").checked;
+    try { await api("/api/settings", {declarations}); } catch (e) { alert(e.message); return; }
+    state.settings.declarations = declarations;
+    $("paperDialog").close();
+    runPrepare(index, name, declarations);
+  };
+  $("paperDialog").showModal();
+}
+
+async function runPrepare(index, name, declarations) {
   $("pkgCard").classList.remove("hidden");
   $("pkgBody").classList.add("hidden");
   $("submitCard").classList.add("hidden");
   $("pkgJournal").textContent = name;
   $("pkgCard").scrollIntoView({behavior: "smooth"});
   try {
-    const {job} = await api("/api/prepare", {find_job: findJob, index, supplements: supplements.map(f => f.path)});
+    const {job} = await api("/api/prepare", {find_job: findJob, index, declarations,
+                                             supplements: supplements.map(f => f.path)});
     await poll(job, $("pkgLog"), (j) => {
       if (j.status !== "done") return;
       pkg = j.result;
@@ -510,7 +543,6 @@ function openSettings() {
   $("s_name").value = s.author_name || "";
   $("s_aff").value = s.author_affiliation || "";
   $("s_email").value = s.author_email || "";
-  DECL.forEach(k => $("d_" + k).value = ((s.declarations || {})[k]) || "");
   $("outDir").textContent = state.output_dir;
   $("updateMsg").textContent = "";
   $("settings").showModal();
@@ -521,8 +553,7 @@ $("saveSettings").onclick = async () => {
   try {
     await api("/api/settings", {provider: p.id, keys: {[p.key]: $("s_key").value.trim()},
       model: $("s_model").value.trim(), author_name: $("s_name").value,
-      author_affiliation: $("s_aff").value, author_email: $("s_email").value,
-      declarations: Object.fromEntries(DECL.map(k => [k, $("d_" + k).value]))});
+      author_affiliation: $("s_aff").value, author_email: $("s_email").value});
   } catch (e) { alert(e.message); return; }
   $("settings").close();
   refresh();

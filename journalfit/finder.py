@@ -120,7 +120,13 @@ class Finder:
                 return "not Scopus-indexed"
             if j.scopus_active is False:
                 return "discontinued in Scopus"
-        if criteria.min_quartile:
+        if criteria.quartiles and set(criteria.quartiles) != set(config.QUARTILE_ORDER):
+            q = j.metrics.quartile
+            if q is None and criteria.if_missing == "skip":
+                return "quartile unknown"
+            if q is not None and q not in criteria.quartiles:
+                return f"{q} not among the chosen quartiles ({', '.join(sorted(criteria.quartiles))})"
+        elif criteria.min_quartile:
             limit = config.QUARTILE_ORDER[criteria.min_quartile]
             q = j.metrics.quartile
             if q is None and criteria.if_missing == "skip":

@@ -49,7 +49,11 @@ tool never clicks buttons on submission sites.
 - `finder.py` runs the pipeline: AI lookups for the top N journals (20 for DeepSeek),
   a 90-day cache of real findings, a scope review of every finalist, and diagnostics.
 - `prepare.py` builds the package (checklist, cover letter, supplementary files).
-- `submit/assistant.py` fills forms by label and uploads files; it never clicks buttons.
+- `submit/assistant.py` fills forms and uploads files; it never clicks buttons. It handles
+  item-type uploads (Editorial Manager, ScholarOne), rich-text editors, lists, option groups
+  and tick boxes. Standard confirmations are ticked only if the author switched them on.
+- `submit/ai_mapper.py`: the AI reads each form page and says which prepared item goes in which
+  box. It never writes text itself, and the hard rules in assistant.py still apply.
 - `app.py` and `web/index.html` make up the local web app.
 - `trace.py` writes the per-run diagnostics.
 

@@ -31,6 +31,7 @@ class Criteria:
     max_acceptance_days: float | None = None  # submission to acceptance
     min_acceptance_rate: float | None = None
     min_quartile: str | None = None  # e.g. "Q2" keeps Q1 and Q2
+    quartiles: list[str] = field(default_factory=list)  # exact choice, e.g. ["Q2"] or ["Q1", "Q3"]
     max_apc_usd: float | None = None
     if_missing: str = "keep"  # "keep" or "skip" journals whose metric is unknown
     years: int = 5  # how far back to look at published papers
@@ -53,7 +54,9 @@ class Criteria:
             parts.append(f"accepted within {self.max_acceptance_days:g} days")
         if self.min_acceptance_rate is not None:
             parts.append(f"acceptance rate >= {self.min_acceptance_rate:g}%")
-        if self.min_quartile:
+        if self.quartiles:
+            parts.append("quartile " + " or ".join(sorted(self.quartiles)))
+        elif self.min_quartile:
             parts.append(f"{self.min_quartile} or better")
         if self.max_apc_usd is not None:
             parts.append(f"APC <= ${self.max_apc_usd:g}")

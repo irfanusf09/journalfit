@@ -294,7 +294,7 @@ def test_next_upload_waits_for_the_previous_one(tmp_path):
     logs = []
     _run(EDITORIAL_MANAGER_UPLOAD, plan, uploaded)
     _, _, files, _ = _run(EDITORIAL_MANAGER_UPLOAD, plan, uploaded, logs=logs)  # immediately after
-    assert files == ["", ""] and any("waiting for the previous upload" in l for l in logs)
+    assert files == ["", ""] and plan.pending_uploads
     plan.last_upload = 0
     busy = EDITORIAL_MANAGER_UPLOAD.replace("<form>", "<form><p>Uploading manuscript.docx... please wait</p>")
     _, _, files, _ = _run(busy, plan, uploaded, logs=logs)
@@ -355,3 +355,155 @@ def test_declarations_go_only_into_multiline_boxes_and_missing_required_fields_a
     needed = next(l for l in logs if "Still needed from you" in l)
     assert "Data availability statement" in needed and "special issue" in needed
     assert any("add this declaration in Settings" in r for r in report)
+
+
+QUESTIONS_PAGE = """
+<h3>Additional Information</h3>
+<fieldset><legend>Do you have any competing interests to declare? *</legend>
+  <label><input type="radio" name="ci" value="y"> Yes</label>
+  <label><input type="radio" name="ci" value="n"> No</label></fieldset>
+<div class="q"><p>I confirm that this manuscript is original and is not under consideration elsewhere *</p>
+  <label><input type="checkbox" id="orig"> I confirm</label></div>
+<div class="q"><p>Would you like to receive marketing newsletters?</p>
+  <label><input type="checkbox" id="news"> Yes please</label></div>
+<div class="q"><p>Is this submission for a special issue? *</p>
+  <label><input type="radio" name="si" value="y"> Yes</label><label><input type="radio" name="si" value="n"> No</label></div>
+<div class="author"><div>Author title</div><input type="text" id="atitle"></div>
+"""
+
+
+class FakeMapper:
+    """Stands in for the AI: claims every box, including ones the hard rules must refuse."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __call__(self, fields, values):
+        self.seen = fields
+        out = {}
+        for f in fields:
+            label = f["label"].lower()
+            if f["type"] == "radio" and "competing" in label:
+                out[f["idx"]] = ("competing_interests", "No")
+            elif f["type"] == "radio" and "special issue" in label:
+                out[f["idx"]] = ("competing_interests", "Maybe")  # not a real option: must be ignored
+            elif f["type"] == "checkbox":
+                out[f["idx"]] = ("confirm", None) if "original" in label else ("title", None)
+            elif f["type"] == "text":
+                out[f["idx"]] = ("title", None)  # an author field: the person rule must refuse
+        return out
+
+
+def _questions_plan(tmp_path, confirm=True):
+    pkg = _pkg(tmp_path)
+    meta = json.loads((pkg / "metadata.json").read_text())
+    meta["declarations"] = {"competing_interests": "The authors declare no competing interests.",
+                            "confirm_standard": confirm}
+    (pkg / "metadata.json").write_text(json.dumps(meta))
+    return load_plan(pkg)[0]
+
+
+def test_ai_answers_questions_and_ticks_only_standard_confirmations(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    plan = _questions_plan(tmp_path)
+    mapper, logs = FakeMapper(), []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(QUESTIONS_PAGE)
+        fill_page(page, plan, log=logs.append, uploaded=set(), mapper=mapper)
+        state = page.evaluate("""() => ({
+            ci: [...document.querySelectorAll('input[name=ci]')].map(r => r.checked),
+            si: [...document.querySelectorAll('input[name=si]')].map(r => r.checked),
+            orig: document.querySelector('#orig').checked, news: document.querySelector('#news').checked,
+            atitle: document.querySelector('#atitle').value})""")
+        b.close()
+    assert state["ci"] == [False, True]          # "No", settled by the declaration
+    assert state["si"] == [False, False]         # invented option ignored
+    assert state["orig"] is True and state["news"] is False
+    assert state["atitle"] == ""                 # person field refused even though the AI claimed it
+    radios = [f for f in mapper.seen if f["type"] == "radio"]
+    assert [r["options"] for r in radios] == [["Yes", "No"], ["Yes", "No"]]
+    assert "competing interests" in radios[0]["label"].lower()
+    needed = next(l for l in logs if "Still needed" in l)
+    assert "special issue" in needed
+
+
+def test_confirmations_are_not_ticked_unless_switched_on(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    plan = _questions_plan(tmp_path, confirm=False)
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(QUESTIONS_PAGE)
+        fill_page(page, plan, log=lambda *_: None, uploaded=set(), mapper=FakeMapper())
+        orig = page.evaluate("document.querySelector('#orig').checked")
+        b.close()
+    assert orig is False
+
+
+def test_extra_files_get_their_own_item_type(tmp_path, monkeypatch):
+    monkeypatch.setattr("journalfit.submit.assistant.UPLOAD_GAP", 0)
+    pkg = _pkg(tmp_path)
+    (pkg / "supplementary").mkdir()
+    for n in ("Figure1.tif", "Table 2.docx", "appendix.pdf"):
+        (pkg / "supplementary" / n).write_bytes(b"z")
+    plan, _ = load_plan(pkg)
+    uploaded, chosen = set(), []
+    for _ in range(4):
+        _, _, files, selects = _run(EDITORIAL_MANAGER_UPLOAD, plan, uploaded)
+        chosen.append((selects[0], files[0]))
+    # Extra files go in name order (capitals first), each with its own type.
+    assert chosen == [("Manuscript", "manuscript.docx"), ("Figure", "Figure1.tif"),
+                      ("Table", "Table 2.docx"), ("Supplementary Material", "appendix.pdf")]
+    assert plan.pending_uploads is False
+
+
+def test_pending_uploads_flag_keeps_the_assistant_coming_back(tmp_path):
+    pkg = _pkg(tmp_path)
+    (pkg / "cover_letter.docx").write_bytes(b"c")
+    plan, _ = load_plan(pkg)
+    _run(EDITORIAL_MANAGER_UPLOAD, plan, set())
+    assert plan.pending_uploads is True  # the cover letter still has to go up
+
+
+def test_ai_mapper_validates_its_answers():
+    from journalfit.submit.ai_mapper import make_mapper
+
+    class LLM:
+        calls = 0
+
+        def structured(self, system, prompt, schema, effort="medium"):
+            LLM.calls += 1
+            return {"fields": [
+                {"id": 1, "item": "abstract", "option": None},
+                {"id": 2, "item": "article_type", "option": "research article"},
+                {"id": 3, "item": "article_type", "option": "Made-up type"},
+                {"id": 4, "item": "nonsense", "option": None},
+                {"id": 5, "item": "title", "option": None},   # a tick box may only be "confirm"
+                {"id": 99, "item": "title", "option": None},  # no such box
+            ]}
+
+    fields = [{"idx": 1, "type": "richtext", "bits": ["Abstract"], "options": []},
+              {"idx": 2, "type": "select", "bits": ["Article type"], "options": ["Select", "Research Article"]},
+              {"idx": 3, "type": "select", "bits": ["Section"], "options": ["A", "B"]},
+              {"idx": 4, "type": "text", "bits": ["x"], "options": []},
+              {"idx": 5, "type": "checkbox", "bits": ["Agree"], "options": []}]
+    values = {"title": "T", "abstract": "A", "article_type": "original research"}
+    mapper = make_mapper(LLM())
+    assert mapper(fields, values) == {1: ("abstract", None), 2: ("article_type", "Research Article")}
+    mapper(fields, values)
+    assert LLM.calls == 1  # same page again: answered from memory, no second AI call
+
+
+def test_hidden_item_type_list_is_still_used(tmp_path):
+    # Editorial Manager hides the real list behind a custom-styled drop-down: the manuscript must
+    # still go up as "Manuscript", never through the plain upload box without a type.
+    plan, _ = load_plan(_pkg(tmp_path))
+    html = EDITORIAL_MANAGER_UPLOAD.replace('<select id="ddSubmissionItemType"',
+                                            '<div class="fancy-dropdown">Select Item Type ▾</div>'
+                                            '<select style="display:none" id="ddSubmissionItemType"')
+    _, _, files, selects = _run(html, plan, set())
+    assert selects[0] == "Manuscript" and files == ["manuscript.docx", ""]

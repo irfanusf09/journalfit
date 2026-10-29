@@ -63,7 +63,10 @@ DECLARATION_FIELDS = {
 def declarations(s: dict | None = None) -> dict:
     s = s if s is not None else load()
     d = s.get("declarations") or {}
-    return {k: str(d.get(k, "")).strip() for k in DECLARATION_FIELDS if str(d.get(k, "")).strip()}
+    out = {k: str(d.get(k, "")).strip() for k in DECLARATION_FIELDS if str(d.get(k, "")).strip()}
+    if d.get("confirm_standard"):
+        out["confirm_standard"] = True
+    return out
 
 
 def make(provider: str | None = None, model: str | None = None):

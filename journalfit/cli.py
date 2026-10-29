@@ -45,6 +45,7 @@ def add_filter_args(p: argparse.ArgumentParser) -> None:
                    help="skip journals where acceptance typically takes longer (submission to acceptance)")
     g.add_argument("--min-acceptance", type=float, metavar="PCT", help="skip journals accepting fewer than PCT%%")
     g.add_argument("--min-quartile", choices=["Q1", "Q2", "Q3", "Q4"], help="e.g. Q2 keeps Q1 and Q2")
+    g.add_argument("--quartiles", metavar="LIST", help="exact quartiles to keep, e.g. Q2 or Q1,Q3")
     g.add_argument("--max-apc", type=float, metavar="USD", help="max publication fee for open-access journals")
     g.add_argument("--if-missing", choices=["keep", "skip"], default="keep",
                    help="journals that don't publish a metric you filter on: keep (flagged) or skip")
@@ -68,6 +69,7 @@ def criteria_from(a: argparse.Namespace) -> Criteria:
         max_first_decision_days=a.max_first_decision, min_acceptance_rate=a.min_acceptance,
         max_acceptance_days=a.max_acceptance_days,
         min_quartile=a.min_quartile, max_apc_usd=a.max_apc, if_missing=a.if_missing, years=a.years,
+        quartiles=[q.strip().upper() for q in (a.quartiles or "").split(",") if q.strip()],
     )
 
 

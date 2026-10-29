@@ -113,6 +113,7 @@ def run_find(job: Job, body: dict) -> dict:
         max_acceptance_days=_num(c.get("max_acceptance_days")),
         min_acceptance_rate=_num(c.get("min_acceptance")),
         min_quartile=c.get("min_quartile") or None,
+        quartiles=[q for q in (c.get("quartiles") or []) if q in config.QUARTILE_ORDER],
         max_apc_usd=_num(c.get("max_apc")),
         if_missing="skip" if c.get("skip_missing") else "keep",
     )
@@ -160,7 +161,7 @@ def _cand_json(c) -> dict:
     }
 
 
-def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> dict:
+def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str], declarations: dict | None = None) -> dict:
     from .prepare import build_package
 
     res = find_job.data["result"]
@@ -172,7 +173,8 @@ def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> 
         job.say("AI is reading the author guidelines and writing the cover letter (1-3 minutes)...")
         before = claude.cost.usd
     pkg = build_package(ms, cand, claude, settings_mod.author(), find_job.data["out"], supplements=supplements,
-                        declarations=settings_mod.declarations())
+                        declarations=_clean_declarations(declarations) if declarations is not None
+                        else settings_mod.declarations())
     meta = json.loads((pkg / "metadata.json").read_text())
     cover = pkg / "cover_letter.txt"
     job.say("Package ready.")
@@ -188,6 +190,14 @@ def run_prepare(job: Job, find_job: Job, index: int, supplements: list[str]) -> 
         "files": sorted(p.name for p in pkg.iterdir()),
         "supplementary": meta.get("supplementary_files", []),
     }
+
+
+def _clean_declarations(d: dict) -> dict:
+    """Only known declaration fields; text trimmed, the confirmations switch kept as true/false."""
+    out = {k: str(v).strip() for k, v in d.items() if k in settings_mod.DECLARATION_FIELDS and str(v).strip()}
+    if d.get("confirm_standard"):
+        out["confirm_standard"] = True
+    return out
 
 
 def _num(v):
@@ -225,12 +235,21 @@ class Assistant:
 
             plan, _ = load_plan(package)
             uploaded: set[str] = set()  # files already uploaded in this session
+            mapper = None
+            try:
+                from .submit.ai_mapper import make_mapper
+
+                mapper = make_mapper(settings_mod.make())
+                self.log.append("The AI reads each form page to decide what goes where.")
+            except Exception:
+                self.log.append("No AI key set: using built-in rules to recognise form boxes.")
             config.ensure_data_dir()
 
             def fill(page, manual: bool) -> None:
                 report: list[str] = []
-                n = fill_page(page, plan, log=self.log.append, uploaded=uploaded, report=report)
-                write_report(package, page.url, report)
+                n = fill_page(page, plan, log=self.log.append, uploaded=uploaded, report=report, mapper=mapper)
+                if n or manual or not plan.pending_uploads:
+                    write_report(package, page.url, report)
                 if n or manual:
                     self.log.append(f"{n} field(s) filled on this page." if n else
                                     "Nothing recognised to fill on this page.")
@@ -256,7 +275,7 @@ class Assistant:
                             page.goto(arg)
                         elif cmd == "fill":
                             fill(page, manual=True)
-                            last_sig = page_signature(page)
+                            last_sig = "" if plan.pending_uploads else page_signature(page)
                         elif cmd == "watch" and self.auto:
                             sig = page_signature(page)
                             # Fill once the new page has stopped changing for one poll.
@@ -267,7 +286,8 @@ class Assistant:
                                     pending, polls = sig, 0
                                 if polls >= 1:
                                     fill(page, manual=False)
-                                    last_sig = page_signature(page)
+                                    # Files still to upload: come back to this page, don't wait for it to change.
+                                    last_sig = "" if plan.pending_uploads else page_signature(page)
                     except Exception as e:
                         if cmd != "watch":
                             self.log.append(f"Problem: {e}")
@@ -424,8 +444,7 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("provider") and body["provider"] not in PROVIDERS:
                     raise ValueError("unknown provider")
                 if isinstance(body.get("declarations"), dict):
-                    s["declarations"] = {k: str(v).strip() for k, v in body["declarations"].items()
-                                         if k in settings_mod.DECLARATION_FIELDS}
+                    s["declarations"] = _clean_declarations(body["declarations"])
                 for k in ("provider", "author_name", "author_affiliation", "author_email"):
                     if k in body:
                         s[k] = str(body[k]).strip()
@@ -444,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
                 supplements = [str(Path(p).resolve()) for p in body.get("supplements") or []]
                 if any(supp_root not in Path(p).parents or not Path(p).is_file() for p in supplements):
                     raise ValueError("Supplementary files must be added with the upload box.")
-                return self._json({"job": start_job(run_prepare, find_job, int(body["index"]), supplements).id})
+                return self._json({"job": start_job(run_prepare, find_job, int(body["index"]), supplements,
+                                                    body.get("declarations")).id})
             if u.path == "/api/open-folder":
                 p = Path(body["path"]).resolve()
                 if OUTPUT_DIR.resolve() not in [p, *p.parents]:

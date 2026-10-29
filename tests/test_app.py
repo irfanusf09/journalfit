@@ -97,8 +97,15 @@ def test_click_through(server):
         assert "Acceptance: 22%" in page.locator("#results .journal").nth(1).inner_text()
 
         page.click("#results .journal >> nth=0 >> text=Prepare submission for this journal")
+        # "About this paper" is asked first, so nothing in the letter or forms is guessed.
+        page.wait_for_selector("#paperDialog[open]")
+        page.fill("#d_competing_interests", "The authors declare no competing interests.")
+        page.check("#d_confirm_standard")
+        page.click("#paperContinue")
         page.wait_for_selector("#pkgBody:not(.hidden)", timeout=20000)
         assert "Submission checklist" in page.inner_text("#checklist")
+        assert "Competing interests: The authors declare no competing interests." in page.inner_text("#checklist")
+        assert "Standard author confirmations" in page.inner_text("#checklist")
         assert page.is_visible("#submitCard")
         assert page.input_value("#subUrl") == "https://www.sciencedirect.com/journal/carbon"  # homepage fallback
         assert "Submit manuscript" in page.inner_text("#subHint")
@@ -110,15 +117,12 @@ def test_click_through(server):
         assert page.inner_text("#keyLabel") == "DeepSeek API key"
         page.fill("#s_key", "sk-deepseek-test")
         page.fill("#s_name", "Dr Test")
-        page.click("#declBox summary")
-        page.fill("#d_competing_interests", "The authors declare no competing interests.")
         page.click("#saveSettings")
         page.wait_for_selector("#keyCard", state="hidden")
         assert "DeepSeek" in page.inner_text("#aiName")
         state = page.evaluate("fetch('/api/state', {headers: {'X-Token': TOKEN}}).then(r => r.json())")
         assert state["has_api_key"] and state["keys_set"] == ["DEEPSEEK_API_KEY"]
         assert "keys" not in state["settings"] and "sk-deepseek" not in str(state)
-        assert state["settings"]["declarations"]["competing_interests"] == "The authors declare no competing interests."
 
         # Switching provider keeps the saved DeepSeek key but needs a key of its own.
         page.click("#settingsBtn")

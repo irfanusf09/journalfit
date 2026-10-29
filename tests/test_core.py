@@ -459,3 +459,15 @@ def test_source_urls_are_tidied():
     assert _clean_url("https://link.springer.com/journal/11356?page=4#1") == "https://link.springer.com/journal/11356"
     assert _clean_url("https://www.tandfonline.com/action/journalInformation?show=journalMetrics&journalCode=x") == \
         "https://www.tandfonline.com/action/journalInformation?show=journalMetrics&journalCode=x"
+
+
+def test_exact_quartile_choice():
+    f = Finder.__new__(Finder)
+    j = lambda q: Candidate(journal=Journal("S", "J", metrics=Metrics(quartile=q)))
+    only_q2 = Criteria(quartiles=["Q2"])
+    assert f.apply_static_filters(j("Q1"), only_q2, set()).startswith("Q1 not among the chosen quartiles")
+    assert f.apply_static_filters(j("Q2"), only_q2, set()) == ""
+    q1_q3 = Criteria(quartiles=["Q1", "Q3"])
+    assert f.apply_static_filters(j("Q3"), q1_q3, set()) == "" and f.apply_static_filters(j("Q2"), q1_q3, set())
+    assert f.apply_static_filters(j(None), Criteria(quartiles=["Q2"], if_missing="skip"), set()) == "quartile unknown"
+    assert "quartile Q1 or Q3" in q1_q3.describe()
