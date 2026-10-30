@@ -11,6 +11,23 @@ from pathlib import Path
 from .models import Candidate, Manuscript
 
 
+WILEY_DOI = re.compile(r"^10\.(?:1111|1002)/([a-z]{2,8})\.\d", re.I)
+
+
+def known_submission_link(cand: Candidate) -> tuple[str, str] | None:
+    """The submission site when the guidelines didn't give it and the publisher's pattern is known.
+
+    Wiley: most journals take submissions on Research Exchange at /journal/<code>, and the code is
+    the one in the journal's own DOIs (10.1111/issj.12580 -> ISSJ). Used only when the journal's
+    recent papers all agree on one code."""
+    if not re.search(r"wiley", cand.journal.publisher or "", re.I):
+        return None
+    codes = {m.group(1).upper() for w in cand.example_works if (m := WILEY_DOI.match(re.sub(r"^https?://(dx\.)?doi\.org/", "", w.get("doi") or "")))}
+    if len(codes) == 1:
+        return f"https://wiley.atyponrex.com/journal/{codes.pop()}", "Wiley Research Exchange"
+    return None
+
+
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
@@ -53,6 +70,13 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 
+    if not guide.get("submission_url"):
+        link = known_submission_link(cand)
+        if link:
+            guide["submission_url"], guide["submission_system"] = link
+            guide["submission_url_note"] = ("Worked out from the journal's article codes: check that the page "
+                                            "shows this journal's name.")
+
     say = log or (lambda m: None)
     declarations = dict(declarations or {})
     made = make_files(ms, out, guide, llm, author, declarations, authors, say)
@@ -72,6 +96,7 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         "corresponding_author": author,
         "submission_system": guide.get("submission_system"),
         "submission_url": guide.get("submission_url"),
+        "submission_url_note": guide.get("submission_url_note"),
         "guidelines_url": guide.get("guidelines_url"),
         "supplementary_files": sorted(p.name for p in supp_dir.glob("*")) if supp_dir.exists() else [],
         "declarations": declarations or {},

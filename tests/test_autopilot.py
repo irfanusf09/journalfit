@@ -304,3 +304,43 @@ def test_autopilot_pauses_on_an_open_popup(tmp_path, monkeypatch):
         assert "paused" in statuses and any("pop-up window is open" in line for line in logs), logs
         assert page.evaluate("window.pressedNext") is None
         b.close()
+
+
+def test_security_check_page_is_never_touched(tmp_path, monkeypatch):
+    from playwright.sync_api import sync_playwright
+
+    pkg = make_package(tmp_path)
+    plan, _ = assistant.load_plan(pkg)
+    logs: list[str] = []
+    driver = assistant.Driver(pkg, plan, log=logs.append)
+    html = ('<title>Just a moment...</title><h1>onlinelibrary.wiley.com</h1><p>Performing security verification</p>'
+            '<label for="t">Title</label><input id="t" name="t">'
+            '<input type="checkbox" id="human"><button onclick="window.pressedNext = 1">Continue</button>')
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        page = b.new_page()
+        page.set_content(html)
+        statuses = [driver.tick(page) for _ in range(3)]
+        assert statuses == ["check"] * 3
+        assert sum("security check" in line for line in logs) == 1, logs
+        assert page.evaluate("window.pressedNext") is None
+        assert page.input_value("#t") == "" and not page.is_checked("#human")
+        driver.check_since -= 60  # still there after half a minute: explain what to do instead
+        driver.tick(page)
+        assert any("submission link" in line for line in logs), logs
+        b.close()
+
+
+def test_wiley_submission_link_from_the_journals_doi_code():
+    from journalfit.models import Candidate, Journal
+    from journalfit.prepare import known_submission_link
+
+    def cand(publisher, dois):
+        return Candidate(journal=Journal(openalex_id="S1", name="International Social Science Journal", publisher=publisher),
+                         example_works=[{"doi": d} for d in dois])
+
+    assert known_submission_link(cand("Wiley", ["10.1111/issj.12580", "https://doi.org/10.1111/issj.12476"])) == \
+        ("https://wiley.atyponrex.com/journal/ISSJ", "Wiley Research Exchange")
+    assert known_submission_link(cand("Wiley", ["10.1111/1477-8947.70049"])) is None  # no code in the DOI
+    assert known_submission_link(cand("Wiley", ["10.1111/issj.1", "10.1002/bse.2"])) is None  # codes disagree
+    assert known_submission_link(cand("Springer", ["10.1111/issj.12580"])) is None

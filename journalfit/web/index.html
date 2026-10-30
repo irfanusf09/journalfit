@@ -545,8 +545,10 @@ async function runPrepare(index, name, declarations) {
       $("coverBox").classList.toggle("hidden", !pkg.cover_letter);
       showPeople(pkg.authors || [], pkg.reviewers || []);
       $("subUrl").value = pkg.submission_url;
-      $("subHint").textContent = pkg.submission_url_found ? "" :
-        "The journal's direct submission link wasn't found, so this is its homepage. After it opens, click the journal's 'Submit manuscript' button, then use 'Fill this page'.";
+      $("subHint").innerHTML = pkg.submission_url_found ? esc(pkg.submission_url_note || "") :
+        "The journal's submission link wasn't found. In your usual browser, open " +
+        (pkg.guidelines_url ? `<a href="${esc(pkg.guidelines_url)}" target="_blank" rel="noopener">the journal's author page</a>` : "the journal's author page") +
+        ", click its <b>Submit</b> button and paste that page's address here (for example an Editorial Manager, ScholarOne or Research Exchange address).";
       $("submitCard").classList.remove("hidden");
     });
   } catch (e) { alert(e.message); }

@@ -111,8 +111,9 @@ def test_click_through(server):
         assert "Competing interests: The authors declare no competing interests." in page.inner_text("#checklist")
         assert "Standard author confirmations" in page.inner_text("#checklist")
         assert page.is_visible("#submitCard")
-        assert page.input_value("#subUrl") == "https://www.sciencedirect.com/journal/carbon"  # homepage fallback
-        assert "Submit manuscript" in page.inner_text("#subHint")
+        assert page.input_value("#subUrl") == ""  # no submission link found: the author pastes it
+        assert "paste that page's address" in page.inner_text("#subHint")
+        assert page.get_attribute("#subHint a", "href") == "https://www.sciencedirect.com/journal/carbon"
         page.screenshot(path=str(tmp / "app.png"), full_page=True)
 
         # Settings: the key is stored but never sent back to the page.

@@ -191,9 +191,12 @@ def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], dec
         "journal": cand.journal.name, "package": str(pkg),
         "checklist": (pkg / "checklist.md").read_text(),
         "cover_letter": cover.read_text() if cover.exists() else "",
-        # No portal link found: the journal homepage has a "Submit manuscript" button to start from.
-        "submission_url": meta.get("submission_url") or cand.journal.homepage or meta.get("guidelines_url") or "",
+        # No portal link found: left empty for the author to paste. The journal's homepage is not
+        # a submission site, and publisher homepages often block automated browsers.
+        "submission_url": meta.get("submission_url") or "",
+        "guidelines_url": meta.get("guidelines_url") or cand.journal.homepage or "",
         "submission_url_found": bool(meta.get("submission_url")),
+        "submission_url_note": meta.get("submission_url_note") or "",
         "files": sorted(p.name for p in pkg.iterdir()),
         "supplementary": meta.get("supplementary_files", []),
         "authors": json.loads((pkg / "authors.json").read_text()) if (pkg / "authors.json").exists() else [],

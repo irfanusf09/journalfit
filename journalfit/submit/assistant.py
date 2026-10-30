@@ -873,6 +873,7 @@ class Driver:
         self.uploaded: set[str] = set()  # never upload the same file twice in one session
         self.last_sig = self.pending = ""
         self.polls = 0
+        self.check_since = 0.0  # when a security-check page was first seen
 
     def fill(self, page, manual: bool = False) -> int:
         report: list[str] = []
@@ -892,9 +893,28 @@ class Driver:
 
     def tick(self, page) -> str:
         """One look at the page. Returns what happened ('filled', 'next', 'paused', ...)."""
+        import time
+
+        from .navigator import is_bot_check
+
         sig = page_signature(page)
         if not sig:
             return "no page"
+        if is_bot_check(page):
+            # A site checking for robots: only the author may answer it, and the tool never tries to.
+            now = time.time()
+            if not self.check_since:
+                self.check_since = now
+                self.log("PAUSED: the site is showing a security check ('verify you are human'). If it has a "
+                         "box to tick, tick it yourself in that window; the tool waits and carries on after.")
+            elif self.check_since > 0 and now - self.check_since > 30:
+                self.check_since = -1.0  # said once
+                self.log("The security check keeps repeating: this page doesn't let automated browsers in. "
+                         "Usually it is the journal's homepage, not its submission site. Close the browser, paste "
+                         "the journal's submission link (Editorial Manager, ScholarOne, Research Exchange, ...) "
+                         "into 'Submission website' and open it again.")
+            return "check"
+        self.check_since = 0.0
         if sig != self.last_sig:
             # Fill once the new page has stopped changing for one look.
             if sig == self.pending:

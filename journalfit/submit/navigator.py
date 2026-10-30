@@ -207,6 +207,20 @@ def has_modal(page) -> bool:
     return False
 
 
+# "Are you a robot?" pages (Cloudflare and similar). The tool never tries to get past them.
+BOT_CHECK = re.compile(r"performing security verification|verify(ing)? you are (a )?human|checking your browser|"
+                       r"just a moment\.\.\.|attention required.{0,5}cloudflare|enable javascript and cookies to continue|"
+                       r"press (&|and) hold|are you a robot|unusual traffic from your", re.I)
+
+
+def is_bot_check(page) -> bool:
+    try:
+        title = page.title()
+    except Exception:
+        title = ""
+    return bool(BOT_CHECK.search(title) or BOT_CHECK.search(page_text(page)[:3000]))
+
+
 def stop_reason(page) -> str | None:
     """Why the autopilot must hand over on this page, or None to carry on."""
     if has_password_box(page):
