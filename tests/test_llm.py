@@ -152,7 +152,7 @@ def test_deepseek_searches_official_pages_and_reads_them(monkeypatch):
             {"url": "https://link.springer.com/journal/1?utm_source=g#1", "title": "J"},
             {"url": "https://www.myjournal.org/about", "title": "own site"},
         ]},
-        DeepSeek.FETCH_URL: lambda body: {"data": {"content": f"Journal of Things. PAGE {body['url']}: first decision 21 days"}},
+        DeepSeek.FETCH_URL: lambda body: {"data": {"content": f"Journal of Things. PAGE {body['url']}: first decision 21 days, acceptance rate 30%"}},
         DeepSeek.URL: {"choices": [{"message": {"content": METRIC_ANSWER}}],
                        "usage": {"prompt_tokens": 3000, "completion_tokens": 50}},
     })
