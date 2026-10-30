@@ -168,6 +168,38 @@ GUIDE_RULES = (
     "Be brief; don't list routine things every journal asks for after acceptance.")
 
 
+# Words that must stand near a figure on the page for it to count as that metric.
+METRIC_WORDS = {
+    "days_to_first_decision": r"first\s+decision|decision|review",
+    "days_to_acceptance": r"accept",
+    "acceptance_rate": r"accept",
+    "impact_factor": r"impact\s+factor|\bjif\b|\bif\b",
+    "citescore": r"cite\s*score",
+}
+
+
+def stated_in(name: str, value: float, text: str) -> bool:
+    """Is this figure written in the text as that metric: words naming it just before, and the
+    right unit after (days/weeks/months for times, % for rates)? The model converts weeks and
+    months to days, so those forms count too."""
+    if name.startswith("days_"):
+        forms = [(value, r"days?"), (value / 7, r"weeks?|wks?"), (value / 30, r"months?")]
+    elif name == "acceptance_rate":
+        forms = [(value, r"%|per\s*cent")]
+    else:
+        forms = [(value, r"")]
+    words = re.compile(METRIC_WORDS.get(name, r"$^"), re.I)
+    for f, unit in forms:
+        if f <= 0:
+            continue
+        s = f"{f:.2f}".rstrip("0").rstrip(".")
+        after = rf"\s*(?:{unit})" if unit else r"(?![\d]|\.\d)"
+        for hit in re.finditer(rf"(?<![\d.]){re.escape(s)}{after}", text, re.I):
+            if words.search(text[max(0, hit.start() - 80):hit.start()]):
+                return True
+    return False
+
+
 class LLM:
     """Pipeline steps shared by all providers."""
 
@@ -290,6 +322,10 @@ class LLM:
         for name in METRIC_FIELDS:
             v = data.get(name)
             if isinstance(v, (int, float)) and v > 0:
+                if not self.has_web and not stated_in(name, float(v), docs):
+                    # Not written in any page the tool read: the model's guess, never kept.
+                    trace.note(f"    {name}={v} from the AI is not written on the pages read: dropped")
+                    continue
                 setattr(m, name, float(v))
                 m.sources[name] = f"{self.name} lookup: {url}"
         return m

@@ -544,3 +544,42 @@ def test_backups_and_closest_papers(tmp_path, monkeypatch):
     assert res.backups[0].excluded_reason.startswith("first decision 200")
     carbon = next(c for c in res.ranked if c.journal.name == "Carbon")
     assert carbon.example_works and {"title", "year", "doi", "similarity"} <= set(carbon.example_works[0])
+
+
+def test_ai_metrics_are_kept_only_when_written_on_the_page(monkeypatch):
+    from journalfit import llm as llm_mod
+    from journalfit.models import Journal
+
+    page = ("Journal metrics. Submission to first decision (median): 6 weeks. "
+            "Acceptance rate 18%. Impact Factor 2.4. Volume 4, issue 10.")
+    assert llm_mod.stated_in("days_to_first_decision", 42, page)  # 6 weeks
+    assert llm_mod.stated_in("acceptance_rate", 18, page)
+    assert llm_mod.stated_in("impact_factor", 2.4, page)
+    assert not llm_mod.stated_in("days_to_first_decision", 4, page)  # "Volume 4" is not a decision time
+    assert not llm_mod.stated_in("acceptance_rate", 10, page)  # "issue 10" is not a rate
+    assert not llm_mod.stated_in("citescore", 2.8, page)
+
+    ds = llm_mod.DeepSeek("deepseek-test", "key")
+    monkeypatch.setattr(ds, "web_pages", lambda *a, **k: {"https://publisher.example/j": page})
+    monkeypatch.setattr(ds, "structured", lambda *a, **k: {
+        "days_to_first_decision": 4, "days_to_acceptance": None, "acceptance_rate": 18,
+        "impact_factor": 2.4, "citescore": 2.8, "source_url": "https://publisher.example/j"})
+    m = ds.lookup_metrics(Journal(openalex_id="S1", name="Test Journal", publisher="Wiley"))
+    assert m.days_to_first_decision is None and m.citescore is None  # invented: dropped
+    assert m.acceptance_rate == 18 and m.impact_factor == 2.4
+
+
+def test_remembered_metrics_from_before_the_check_are_looked_up_again(tmp_path):
+    import json
+    import time
+
+    from journalfit.finder import MetricCache
+    from journalfit.models import Metrics
+
+    path = tmp_path / "metric_cache.json"
+    path.write_text(json.dumps({"S1": {"ts": time.time(), "metrics": {"days_to_first_decision": 4.0,
+                                                                      "sources": {"days_to_first_decision": "x"}}}}))
+    cache = MetricCache(path)
+    assert cache.get("S1") is None
+    cache.put("S2", Metrics(impact_factor=2.0, sources={"impact_factor": "y"}))
+    assert cache.get("S2").impact_factor == 2.0

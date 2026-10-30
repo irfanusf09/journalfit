@@ -338,11 +338,13 @@ class MetricCache:
         row = self.data.get(key)
         if not row or time.time() - row["ts"] > self.TTL:
             return None
+        if not row.get("checked"):
+            return None  # saved before AI figures were checked against the page text: look again
         m = Metrics(**row["metrics"])
         return m if m.sources else None  # ignore empty entries saved by older versions
 
     def put(self, key: str, m: Metrics) -> None:
-        self.data[key] = {"ts": time.time(), "metrics": asdict(m)}
+        self.data[key] = {"ts": time.time(), "metrics": asdict(m), "checked": True}
         self.dirty = True
 
     def save(self) -> None:
