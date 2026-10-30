@@ -166,3 +166,63 @@ def test_only_the_extension_can_pair_with_the_app():
         assert hello({})[0] == 403
     finally:
         srv.shutdown()
+
+
+def test_extension_on_a_material_style_portal(tmp_path, monkeypatch):
+    """Taylor & Francis's portal: a lone unlabelled upload box, radio buttons that each have their
+    own name, keyword chips made with Enter, and 'are you an author or submitting for someone'."""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    from journalfit import app
+
+    out_dir = tmp_path / "JournalFit"
+    (out_dir / "paper").mkdir(parents=True)
+    pkg = make_package(out_dir / "paper")
+    meta = json.loads((pkg / "metadata.json").read_text())
+    meta["declarations"]["ethics"] = "Not applicable: the study uses public country-level data."
+    (pkg / "metadata.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(app, "OUTPUT_DIR", out_dir)
+    monkeypatch.setattr(app.EXTENSION, "sessions", {})
+    app_srv = _serve(app.Handler)
+    site = _serve(functools.partial(_Quiet, directory=str(PORTAL)))
+    ext = str(remote.EXTENSION_DIR)
+    with sync_playwright() as pw:
+        ctx = pw.chromium.launch_persistent_context(
+            str(tmp_path / "profile"), channel="chromium", headless=True,
+            args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}"])
+        try:
+            sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
+            sw.evaluate(f"PORTS.splice(0, PORTS.length, {app_srv.server_address[1]}); app = null;")
+            page = ctx.new_page()
+            base = f"http://127.0.0.1:{site.server_address[1]}"
+
+            def run(name):
+                t = time.time() * 1000
+                page.goto(f"{base}/{name}")
+                sw.evaluate("""async (pkg) => {
+                    const [tab] = await chrome.tabs.query({url: 'http://127.0.0.1/*'});
+                    await saveTab(tab.id, {package: pkg, journal: 'J', log: []});
+                    fill(tab.id, true);
+                }""", str(pkg))
+                for _ in range(60):
+                    st = sw.evaluate("(async () => Object.values(await tabs())[0] || {})()")
+                    if st.get("filledAt", 0) > t:
+                        return st, page.evaluate("result()")
+                    page.wait_for_timeout(250)
+                raise AssertionError(st)
+
+            st, res = run("tf_upload.html")
+            assert res["upload"] == ["manuscript.docx"], (res, st)
+            st, res = run("tf.html")
+        finally:
+            ctx.close()
+            app_srv.shutdown()
+            site.shutdown()
+    assert res["title"].startswith("Five Dimensions")
+    assert res["special"] == "No" and res["human"] == "No"
+    assert res["chips"] == ["saving", "credit"]
+    assert res["author"] == "I am an author on this manuscript"
+    assert res["terms"] is False  # agreeing to the publisher's terms is the author's own act
+    assert any("consent to Taylor" in y for y in st["yours"]), st["yours"]

@@ -353,7 +353,9 @@ def test_declarations_go_only_into_multiline_boxes_and_missing_required_fields_a
     n, values, _, _ = _run(html, plan, set(), report=report, logs=logs)
     assert values == ["The authors declare no competing interests.", "", "No funding was received.", ""]
     needed = next(l for l in logs if "Still needed from you" in l)
-    assert "Data availability statement" in needed and "special issue" in needed
+    assert "Data availability statement" in needed
+    # A JournalFit submission is a regular one: "special issue?" is answered No, not left for the author.
+    assert "special issue" not in needed and any("selected 'No'" in r for r in report)
     assert any("add this declaration in Settings" in r for r in report)
 
 

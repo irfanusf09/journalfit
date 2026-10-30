@@ -41,6 +41,9 @@ class RemoteLocator:
     def check(self, force: bool = False) -> None:
         self._add("check")
 
+    def press(self, key: str) -> None:
+        self._add("press", key=key)
+
     def click(self) -> None:
         self.frame.page.focused = self.frame
         self._add("click")
@@ -129,7 +132,7 @@ class Session:
                 log.append("Press the site's 'Add reviewer' button for: " + ", ".join(missing["reviewer"]) + ".")
             log.insert(0, f"{n} box(es) filled on this page." if n else "Nothing to fill on this page.")
             return {"filled": n, "log": log, "pending_uploads": bool(self.plan.pending_uploads),
-                    "needed": state.get("needed") or [], "score": automation_score(self.package_dir),
+                    "needed": state.get("needed") or [], "yours": state.get("yours") or [], "score": automation_score(self.package_dir),
                     "frames": [{"frameId": f.frame_id, "ops": f.ops} for f in page.frames if f.ops]}
 
     def failed(self, paths: list[str], errors: list[str]) -> None:

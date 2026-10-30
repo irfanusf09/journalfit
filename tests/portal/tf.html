@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Submission portal (Material-style practice page)</title></head>
+<body>
+<!-- Built like Taylor & Francis's submission portal (Angular Material): each radio button has
+     its own name inside a role=radiogroup, keywords become chips on Enter, and the first page
+     is a single unlabelled upload box. -->
+<section id="details">
+  <h2>Manuscript Details</h2>
+  <div class="mat-form-field"><label for="title">Manuscript Title</label><input id="title" name="title"></div>
+  <div class="mat-form-field"><label for="abs">Abstract</label><textarea id="abs" name="abs"></textarea></div>
+  <div class="q"><div class="label">Are you submitting your paper for a specific special issue or article collection?
+      (This is typically in response to a Call For Papers, Editor request, or direct invitation)</div>
+    <mat-radio-group role="radiogroup">
+      <mat-radio-button><label><input type="radio" name="mat-radio-3-input" value="true"><span>Yes</span></label></mat-radio-button>
+      <mat-radio-button><label><input type="radio" name="mat-radio-4-input" value="false"><span>No</span></label></mat-radio-button>
+    </mat-radio-group></div>
+  <div class="q"><div class="label">Taylor and Francis require authors of research involving human participants to adhere to
+      the ICMJE guidelines. Does your research involve human participants?</div>
+    <mat-radio-group role="radiogroup">
+      <mat-radio-button><label><input type="radio" name="mat-radio-6-input"><span>Yes</span></label></mat-radio-button>
+      <mat-radio-button><label><input type="radio" name="mat-radio-7-input"><span>No</span></label></mat-radio-button>
+    </mat-radio-group></div>
+  <div><label><input type="checkbox" id="terms"> By submitting my article, I consent to Taylor &amp; Francis processing my submission data</label></div>
+</section>
+<section id="keywords">
+  <h2>Keywords</h2>
+  <mat-chip-grid role="grid" id="chips">
+    <input id="kw" placeholder="Add a keyword">
+  </mat-chip-grid>
+  <p>Enter a keyword followed by the enter key or a comma.</p>
+</section>
+<section id="authors">
+  <div class="q"><div class="label">Are you an author on this manuscript, or are you submitting on behalf of someone else?</div>
+    <mat-radio-group role="radiogroup">
+      <mat-radio-button><label><input type="radio" name="mat-radio-9-input"><span>I am an author on this manuscript</span></label></mat-radio-button>
+      <mat-radio-button><label><input type="radio" name="mat-radio-10-input"><span>I am submitting on behalf of someone else</span></label></mat-radio-button>
+    </mat-radio-group></div>
+</section>
+<script>
+  // Like Material's chip input: Enter (keyCode 13) or comma turns the typed text into a chip.
+  const kw = document.getElementById('kw');
+  kw.addEventListener('keydown', (e) => {
+    if ((e.keyCode === 13 || e.keyCode === 188) && kw.value.trim()) {
+      const chip = document.createElement('mat-chip-row');
+      chip.setAttribute('role', 'row');
+      chip.textContent = kw.value.trim();
+      kw.before(chip);
+      kw.value = '';
+      e.preventDefault();
+    }
+  });
+  window.result = () => ({
+    title: document.getElementById('title').value,
+    special: [...document.querySelectorAll('#details mat-radio-group')][0].querySelector('input:checked')?.nextElementSibling.textContent || '',
+    human: [...document.querySelectorAll('#details mat-radio-group')][1].querySelector('input:checked')?.nextElementSibling.textContent || '',
+    terms: document.getElementById('terms').checked,
+    chips: [...document.querySelectorAll('#chips mat-chip-row')].map(c => c.textContent),
+    author: document.querySelector('#authors input:checked')?.nextElementSibling.textContent || '',
+  });
+</script>
+</body></html>

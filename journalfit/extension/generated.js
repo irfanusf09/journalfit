@@ -50,7 +50,17 @@ self.JF_COLLECT = (startIdx) => {
     r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
   };
   walk(document);
-  const groups = new Map();  // radio buttons are one question per name
+  const groups = new Map();  // radio buttons are one question per name, or per question box
+  const radioNames = {};
+  all.forEach(e => { if ((e.getAttribute('type') || '').toLowerCase() === 'radio' && e.name)
+                       radioNames[e.name] = (radioNames[e.name] || 0) + 1; });
+  // Tag-style boxes (one "chip" per keyword): what is already entered is the chips, not the box.
+  const chipsOf = (el) => {
+    const box = el.closest('mat-chip-list, mat-chip-grid, .mat-mdc-chip-grid, .mat-chip-list, [role="grid"], [role="listbox"]');
+    if (!box) return '';
+    return [...box.querySelectorAll('mat-chip, mat-chip-row, mat-basic-chip, .mat-chip, .mdc-evolution-chip, [role="row"], [role="option"]')]
+      .map(c => txt(c).replace(/\s*(cancel|close|remove|×)\s*$/i, '')).filter(Boolean).join('; ');
+  };
   for (const el of all) {
     const tag = el.tagName.toLowerCase();
     const itype = (el.getAttribute('type') || '').toLowerCase();
@@ -76,7 +86,8 @@ self.JF_COLLECT = (startIdx) => {
                   required: !!el.required || el.getAttribute('aria-required') === 'true' || /\*|required/i.test(bits.slice(0, 2).join(' ')),
                   visible: true, options: [], maxlength: 0, multiple: false});
       } else {
-        const name = el.name || ('anon' + idx);
+        const box = el.closest('[role="radiogroup"], mat-radio-group, fieldset');
+        const name = el.name && radioNames[el.name] > 1 ? 'n:' + el.name : (box || ('anon' + idx));
         let g = groups.get(name);
         if (!g) {
           // The question is the text before the group, not each button's own label.
@@ -120,6 +131,7 @@ self.JF_COLLECT = (startIdx) => {
     el.setAttribute('data-jf-idx', String(idx));
     let value = el.value || '';
     if (rich) value = txt(el);
+    if (!value && tag === 'input') value = chipsOf(el);
     if (tag === 'select') value = el.selectedIndex > 0 ? txt(el.options[el.selectedIndex]) : '';
     const bits = labelsFor(el);
     const required = !!el.required || el.getAttribute('aria-required') === 'true' ||

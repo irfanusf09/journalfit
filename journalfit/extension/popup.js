@@ -20,10 +20,12 @@ async function refresh() {
     const sc = s.tab.score;
     $('score').textContent = sc && sc.percent !== null && sc.percent !== undefined ?
       `So far: ${sc.filled} box(es) filled by JournalFit, ${sc.left_for_you} left for you (${sc.percent}% done for you).` : '';
-    const lines = [...(s.tab.log || [])];
-    if (s.tab.needed && s.tab.needed.length) lines.push('Still needed from you here: ' + s.tab.needed.join('; '));
+    const add = (list, text) => { const li = document.createElement('li'); li.textContent = text; $(list).appendChild(li); };
     $('log').innerHTML = '';
-    for (const l of lines) { const li = document.createElement('li'); li.textContent = l; $('log').appendChild(li); }
+    (s.tab.log || []).forEach((l) => add('log', l));
+    $('yours').innerHTML = '';
+    (s.tab.yours || []).forEach((l) => add('yours', l));
+    $('yoursBox').classList.toggle('hidden', !(s.tab.yours || []).length);
   } else if (s.packages.length && !$('pkg').options.length) {
     for (const p of s.packages) {
       const o = new Option(`${p.journal}  (${p.paper})`, p.package);

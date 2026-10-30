@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Upload (practice)</title></head>
+<body>
+<!-- The first page of Taylor & Francis's portal: one unlabelled upload box and nothing else. -->
+<section id="upload">
+  <h2>Upload your manuscript</h2>
+  <div class="dropzone"><div><span>Drag and drop or</span> <span>browse</span></div>
+    <input type="file" id="drop" style="opacity:0;width:1px;height:1px"></div>
+</section>
+<script>window.result = () => ({upload: [...document.getElementById('drop').files].map(f => f.name)});</script>
+</body></html>

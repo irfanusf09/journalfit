@@ -25,6 +25,9 @@
   .log { margin: 10px 0 0; padding: 0; list-style: none; max-height: 220px; overflow: auto; font-size: 13px; }
   .log li { padding: 4px 0; border-top: 1px solid var(--line); }
   .err { color: #c62828; }
+  #yoursBox { margin-top: 10px; }
+  .yours li::before { content: "☐ "; color: var(--green); }
+  details { margin-top: 8px; }
   .hidden { display: none; }
 </style>
 </head>
@@ -43,7 +46,9 @@
   <div id="onBox" class="hidden">
     <div class="on"><b>On for this tab:</b> <span id="journal"></span><br>
       <span class="muted" id="score"></span></div>
-    <ul class="log" id="log"></ul>
+    <div id="yoursBox" class="hidden"><b>Your turn on this page</b> <span class="muted">(only you can answer or agree to these)</span>
+      <ul class="log yours" id="yours"></ul></div>
+    <details><summary class="muted">What JournalFit did</summary><ul class="log" id="log"></ul></details>
     <div class="row">
       <button id="fill">Fill this page again</button>
       <button id="off">Switch off</button>

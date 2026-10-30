@@ -8,6 +8,18 @@
 const PORTS = Array.from({length: 20}, (_, i) => 8765 + i);
 let app = null;  // {base, token}
 
+// Loaded from the JournalFit folder (Developer mode): when JournalFit has been updated, load the
+// new files instead of running the old copy until the author reloads it by hand.
+async function updateIfNewer(version) {
+  if (!version || version === chrome.runtime.getManifest().version) return;
+  const self = await chrome.management.getSelf();
+  const {tried} = await chrome.storage.session.get('tried');
+  if (self.installType === 'development' && tried !== version) {
+    await chrome.storage.session.set({tried: version});
+    chrome.runtime.reload();
+  }
+}
+
 async function connect() {
   if (app) return app;
   for (const port of PORTS) {
@@ -15,7 +27,10 @@ async function connect() {
     try {
       const r = await fetch(`${base}/api/ext/hello`, {signal: AbortSignal.timeout(1500)});
       const j = await r.json();
-      if (j.app === 'JournalFit' && j.token) return (app = {base, token: j.token});
+      if (j.app === 'JournalFit' && j.token) {
+        await updateIfNewer(j.extension_version);
+        return (app = {base, token: j.token});
+      }
     } catch (e) { /* not on this port */ }
   }
   throw new Error('JournalFit is not running. Double-click the JournalFit icon on your Desktop.');
@@ -103,7 +118,7 @@ async function fill(tabId, manual) {
                                     errors: failed.map((f) => `${f.op || ''} ${f.sel || ''}: ${f.error}`)});
       log.push(`${failed.length} step(s) could not be done on this page; please check it.`);
     }
-    Object.assign(st, {lastSig: sig, pending: res.pending_uploads, log, needed: res.needed, score: res.score,
+    Object.assign(st, {lastSig: sig, pending: res.pending_uploads, log, needed: res.needed, yours: res.yours, score: res.score,
                        filledAt: Date.now()});
     await saveTab(tabId, st);
     chrome.action.setBadgeText({tabId, text: res.filled ? String(res.filled) : ''});

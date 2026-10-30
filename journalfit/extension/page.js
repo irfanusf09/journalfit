@@ -35,7 +35,6 @@
       Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
       fire(el, 'input', 'change');
     }
-    el.blur();
   };
 
   const choose = (el, label) => {
@@ -54,6 +53,17 @@
     }
     el.files = dt.files;
     fire(el, 'input', 'change');
+  };
+
+  // A key press the way the site's own code reads it (Enter turns a typed keyword into a chip).
+  const CODES = {Enter: 13, Tab: 9, ',': 188};
+  const press = (el, key) => {
+    el.focus();
+    for (const type of ['keydown', 'keypress', 'keyup']) {
+      // keyCode/which given when the event is made, so the page's own code sees them too.
+      el.dispatchEvent(new KeyboardEvent(type, {key, code: key, keyCode: CODES[key] || 0, which: CODES[key] || 0,
+                                                bubbles: true, cancelable: true}));
+    }
   };
 
   self.JF_RUN = async (ops) => {
@@ -76,11 +86,14 @@
           if (!el.checked) { el.checked = true; fire(el, 'input', 'change'); }
         } else if (op.op === 'click') { el.focus(); el.click(); focused = el; }  // only boxes, never buttons
         else if (op.op === 'files') attach(el, op.files);
+        else if (op.op === 'press') press(el, op.key);
         await sleep(60);  // let the site react, as it would to typing
       } catch (e) {
         failed.push({op: op.op, sel: op.sel || '', paths: op.paths || [], error: String(e && e.message || e)});
       }
     }
+    // Leave the last box, as a person would: sites check a box's value when you move on.
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
     return failed;
   };
 

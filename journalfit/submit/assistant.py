@@ -70,7 +70,17 @@ COLLECT_JS = r"""
     r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
   };
   walk(document);
-  const groups = new Map();  // radio buttons are one question per name
+  const groups = new Map();  // radio buttons are one question per name, or per question box
+  const radioNames = {};
+  all.forEach(e => { if ((e.getAttribute('type') || '').toLowerCase() === 'radio' && e.name)
+                       radioNames[e.name] = (radioNames[e.name] || 0) + 1; });
+  // Tag-style boxes (one "chip" per keyword): what is already entered is the chips, not the box.
+  const chipsOf = (el) => {
+    const box = el.closest('mat-chip-list, mat-chip-grid, .mat-mdc-chip-grid, .mat-chip-list, [role="grid"], [role="listbox"]');
+    if (!box) return '';
+    return [...box.querySelectorAll('mat-chip, mat-chip-row, mat-basic-chip, .mat-chip, .mdc-evolution-chip, [role="row"], [role="option"]')]
+      .map(c => txt(c).replace(/\s*(cancel|close|remove|×)\s*$/i, '')).filter(Boolean).join('; ');
+  };
   for (const el of all) {
     const tag = el.tagName.toLowerCase();
     const itype = (el.getAttribute('type') || '').toLowerCase();
@@ -96,7 +106,8 @@ COLLECT_JS = r"""
                   required: !!el.required || el.getAttribute('aria-required') === 'true' || /\*|required/i.test(bits.slice(0, 2).join(' ')),
                   visible: true, options: [], maxlength: 0, multiple: false});
       } else {
-        const name = el.name || ('anon' + idx);
+        const box = el.closest('[role="radiogroup"], mat-radio-group, fieldset');
+        const name = el.name && radioNames[el.name] > 1 ? 'n:' + el.name : (box || ('anon' + idx));
         let g = groups.get(name);
         if (!g) {
           // The question is the text before the group, not each button's own label.
@@ -140,6 +151,7 @@ COLLECT_JS = r"""
     el.setAttribute('data-jf-idx', String(idx));
     let value = el.value || '';
     if (rich) value = txt(el);
+    if (!value && tag === 'input') value = chipsOf(el);
     if (tag === 'select') value = el.selectedIndex > 0 ? txt(el.options[el.selectedIndex]) : '';
     const bits = labelsFor(el);
     const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
@@ -332,6 +344,17 @@ NEGATIVE = re.compile(r"\b(no|not|none|nil|never|without|did\s+not|does\s+not|ha
                       r"do\s+not|were\s+not|was\s+not)\b|n/a|not\s+applicable", re.I)
 
 
+# Questions the situation itself settles: (question, option to choose). JournalFit prepares a
+# regular submission by one of the authors, so it is not for a special issue and not on
+# someone else's behalf (Taylor & Francis, ScholarOne and others ask both).
+SETTLED: list[tuple[re.Pattern, re.Pattern]] = [
+    (re.compile(r"special\s+issue|article\s+collection|thematic\s+(issue|collection)|call\s+for\s+papers", re.I),
+     re.compile(r"^\s*no\b", re.I)),
+    (re.compile(r"are\s+you\s+(an?\s+)?author\s+(on|of)\s+this|on\s+behalf\s+of\s+(someone|another|the\s+author)", re.I),
+     re.compile(r"^(?!.*behalf).*\b(i\s+am\s+an?\s+|yes\b.*)?author\b|^\s*yes\b", re.I)),
+]
+
+
 def answer_question(bits: list[str], options: list[str], values: dict[str, str]) -> str | None:
     """'Has this manuscript been submitted before?' -> 'No', when the author's statement says so.
 
@@ -339,6 +362,10 @@ def answer_question(bits: list[str], options: list[str], values: dict[str, str])
     matches the question; anything else is left to the AI mapper or the author.
     """
     question = " | ".join(words_of(b) for b in bits[:2])
+    for asked, pick in SETTLED:
+        if asked.search(question):
+            hits = [o for o in options if pick.search(o)]
+            return hits[0] if len(hits) == 1 else None
     keys = [k for k, rx in QUESTIONS if rx.search(question) and values.get(k)]
     if len(keys) != 1:
         return None
@@ -348,8 +375,9 @@ def answer_question(bits: list[str], options: list[str], values: dict[str, str])
     na = [o for o in options if re.search(r"not\s+applicable|^\s*n/?a\s*$", o, re.I)]
     if len(yes) != 1 or len(no) != 1:
         return None
-    if keys[0] == "ethics" and re.search(r"not\s+applicable", statement, re.I) and len(na) == 1:
-        return na[0]
+    if keys[0] == "ethics" and re.search(r"not\s+applicable", statement, re.I):
+        # Ethics approval "not applicable": no human participants or animals were involved.
+        return na[0] if len(na) == 1 else no[0]
     verdict = statement_says_no(statement)
     return None if verdict is None else no[0] if verdict else yes[0]
 
@@ -373,6 +401,10 @@ def statement_says_no(statement: str) -> bool | None:
         return True
     return None if neg and pos else None
 
+
+# A keyword box that turns each entry into a "chip" when Enter (or a comma) is pressed.
+CHIPS = re.compile(r"enter\s+key|press(ing)?\s+enter|followed\s+by\s+(the\s+)?(enter|return|a\s+comma)|"
+                   r"add\s+a\s+keyword|mat-chip|chip", re.I)
 
 BAD_TYPES = re.compile(r"review|letter|editorial|comment|short|brief|erratum|correction|book|perspective|case", re.I)
 
@@ -526,6 +558,7 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
     saw_file_input = False
     supplements_done = False
     still_needed: list[str] = []
+    yours: list[str] = []  # boxes, questions and tick boxes the author answers on this page
     left_for_you = 0  # boxes the author still has to fill on this page
     seen = 0
     placed: dict[str, set[int]] = {"author": set(), "reviewer": set()}
@@ -583,6 +616,10 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             is_file = f["type"] == "file"
             saw_file_input |= is_file
             key = match_bits(f.get("bits") or [f["label"]], is_file)
+            if is_file and not key and not any(b.strip() for b in f.get("bits") or []) and \
+                    all(g["type"] == "file" for g in fields) and \
+                    sum(g["type"] == "file" for g in fields) == 1:
+                key = "manuscript_file"  # the only thing this page asks for is a file: the manuscript
             ai_option = None
             if f["idx"] in ai and not is_file:
                 ai_key, ai_option = ai[f["idx"]]
@@ -671,6 +708,12 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                         action = "declaration box is a one-line or search field (left for you)"
                     elif key == "abstract" and f["type"] not in ("textarea", "richtext"):
                         action = "abstract box is a one-line field (left for you)"
+                    elif key == "keywords" and CHIPS.search(" ".join(f.get("bits") or [])):
+                        words = [w.strip() for w in value.split(";") if w.strip()]
+                        for w in words:
+                            loc.fill(w)
+                            loc.press("Enter")
+                        action = f"filled {key} ({len(words)} entered one by one)"
                     elif f["type"] == "richtext":
                         loc.click()
                         frame.page.keyboard.insert_text(value)
@@ -690,6 +733,9 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             if not done_ok and not f["value"].strip() and f["type"] != "file" and \
                     (f.get("required") or "(left for you)" in action):
                 left_for_you += 1
+            if not done_ok and not f["value"].strip() and f["type"] != "file" and \
+                    (f.get("required") or f["type"] in ("checkbox", "radio") or "(left for you)" in action):
+                yours.append(_short_label(f))
             if report is not None:
                 via = " (AI)" if f["idx"] in ai else ""
                 report.append(f"  [{action}{via}] {f['type']} | {f['label'][:220]}")
@@ -706,6 +752,7 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
     plan.page_state = {
         "filled": filled, "seen": seen, "left_for_you": left_for_you,
         "needed": list(dict.fromkeys(still_needed)),
+        "yours": list(dict.fromkeys(yours)),
         # People the page neither lists nor has boxes for yet: the autopilot may press "Add author".
         "missing": {r: [people_mod.full_name(p) for p in people_mod.missing(plan.people, text, r, placed[r])]
                     for r in ("author", "reviewer")},
@@ -745,8 +792,8 @@ def _short_label(f: dict) -> str:
     """A readable name for a field: its first label text that looks like words, not a code name."""
     for b in f.get("bits") or []:
         b = b.strip(" *:")
-        if b and " " in b and len(b) < 90:
-            return b
+        if b and " " in b:
+            return b if len(b) < 110 else b[:105].rsplit(" ", 1)[0] + "..."
     return words_of((f.get("bits") or ["a required field"])[0])[:60]
 
 

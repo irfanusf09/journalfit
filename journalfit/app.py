@@ -472,7 +472,8 @@ class Handler(BaseHTTPRequestHandler):
             if not (origin.startswith("chrome-extension://") or
                     (not origin and self.headers.get("Sec-Fetch-Site") == "none")):
                 return self._json({"error": "forbidden"}, 403)
-            return self._json({"app": "JournalFit", "token": TOKEN})
+            manifest = json.loads((ROOT / "extension" / "manifest.json").read_text())
+            return self._json({"app": "JournalFit", "token": TOKEN, "extension_version": manifest["version"]})
         if not self._authorized():
             return self._json({"error": "forbidden"}, 403)
         if u.path == "/api/ext/packages":
