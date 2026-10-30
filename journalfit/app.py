@@ -541,13 +541,21 @@ def make_shortcut() -> Path:
     return path
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # The browser closed the tab or reloaded before the reply was sent: nothing went wrong.
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
+
 def serve(port: int = 8765, open_browser: bool = True) -> None:
     apply_settings(load_settings())
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     server = None
     for p in range(port, port + 20):
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            server = Server(("127.0.0.1", p), Handler)
             break
         except OSError:
             continue
