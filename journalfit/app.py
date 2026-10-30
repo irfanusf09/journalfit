@@ -317,6 +317,54 @@ class Assistant:
 ASSISTANT = Assistant()
 
 
+# ------------------------------------------------------------------ Chrome extension
+
+class Extension:
+    """Submissions being filled in the author's own Chrome by the JournalFit extension."""
+
+    def __init__(self):
+        self.current = ""  # the package shown in step 5, offered first in the extension
+        self.sessions: dict[str, object] = {}
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def package_dir(package: str) -> Path:
+        p = Path(package).resolve()
+        if not ((p / "metadata.json").is_file() and OUTPUT_DIR.resolve() in p.parents):
+            raise ValueError("Unknown submission package. Prepare it in JournalFit first.")
+        return p
+
+    def packages(self) -> list[dict]:
+        out = []
+        for meta in OUTPUT_DIR.glob("*/*/metadata.json"):
+            try:
+                journal = json.loads(meta.read_text()).get("journal") or meta.parent.name
+            except (OSError, ValueError):
+                continue
+            out.append({"package": str(meta.parent), "journal": journal, "paper": meta.parent.parent.name,
+                        "time": meta.stat().st_mtime})
+        return sorted(out, key=lambda p: -p["time"])
+
+    def session(self, package: str, fresh: bool = False):
+        from .submit.remote import Session
+
+        p = self.package_dir(package)
+        with self.lock:
+            if fresh or str(p) not in self.sessions:
+                mapper = None
+                try:
+                    from .submit.ai_mapper import make_mapper
+
+                    mapper = make_mapper(settings_mod.make())
+                except Exception:
+                    pass  # no AI key: the built-in rules recognise the boxes
+                self.sessions[str(p)] = Session(p, mapper=mapper)
+            return self.sessions[str(p)]
+
+
+EXTENSION = Extension()
+
+
 # ------------------------------------------------------------------ helpers
 
 def data_status() -> dict:
@@ -417,8 +465,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "not found"}, 404)
             return self._send(200, p.read_bytes(), "application/octet-stream",
                               {"Content-Disposition": f'attachment; filename="{p.name}"'})
+        if u.path == "/api/ext/hello":
+            # Only the JournalFit extension may pair with the app. Chrome marks its requests
+            # "Sec-Fetch-Site: none" (or with a chrome-extension origin); a web page can't send either.
+            origin = self.headers.get("Origin", "")
+            if not (origin.startswith("chrome-extension://") or
+                    (not origin and self.headers.get("Sec-Fetch-Site") == "none")):
+                return self._json({"error": "forbidden"}, 403)
+            return self._json({"app": "JournalFit", "token": TOKEN})
         if not self._authorized():
             return self._json({"error": "forbidden"}, 403)
+        if u.path == "/api/ext/packages":
+            return self._json({"current": EXTENSION.current, "packages": EXTENSION.packages()})
         if u.path == "/api/state":
             s = load_settings()
             keys = settings_mod.keys(s)
@@ -432,6 +490,7 @@ class Handler(BaseHTTPRequestHandler):
                 "output_dir": str(OUTPUT_DIR),
                 "default_declarations": settings_mod.DEFAULT_DECLARATIONS,
                 "can_update": (REPO_DIR / ".git").exists(),
+                "extension_dir": str(ROOT / "extension"),
             })
         if u.path.startswith("/api/job/"):
             job = JOBS.get(u.path.rsplit("/", 1)[-1])
@@ -507,6 +566,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if u.path == "/api/people":
                 return self._json(save_people(body))
+            if u.path == "/api/ext/open-folder":
+                from .submit.remote import EXTENSION_DIR
+
+                open_path(EXTENSION_DIR)
+                return self._json({"ok": True})
+            if u.path == "/api/ext/current":
+                EXTENSION.current = str(EXTENSION.package_dir(body["package"]))
+                return self._json({"ok": True})
+            if u.path == "/api/ext/fill":
+                s = EXTENSION.session(body["package"])
+                return self._json(s.fill(str(body.get("url") or ""), body.get("frames") or []))
+            if u.path == "/api/ext/failed":
+                EXTENSION.session(body["package"]).failed(body.get("paths") or [], body.get("errors") or [])
+                return self._json({"ok": True})
+            if u.path == "/api/ext/reset":
+                EXTENSION.session(body["package"], fresh=True)
+                return self._json({"ok": True})
             if u.path == "/api/assist/resume":
                 if not ASSISTANT.active:
                     raise ValueError("Open the submission website first.")

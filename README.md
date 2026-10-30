@@ -30,7 +30,9 @@ Give it a manuscript. It finds the journals that fit best (from any publisher), 
    - writes `checklist.md` (must-do items, what was prepared, what is still needed from you), a cover letter (`.docx` and `.txt`) and `metadata.json`.
 
    Statements written in the manuscript are read whether they look like `Funding: ...` or `Funding. ...`. That includes the use of generative AI, acknowledgements and previous submission.
-9. **Submission autopilot.** It opens a real browser with a saved profile, so you log in yourself once (works with 2FA, CAPTCHA and university login). From then on, each page is filled and the tool moves to the next step by itself:
+9. **Fills the journal's submission forms, in your own Chrome.** The JournalFit Chrome extension (folder `journalfit/extension`) works on every submission system, including Wiley, ScholarOne and Taylor & Francis, whose sign-in pages refuse browsers driven by a program. You sign in and press Next as usual; each form page is filled as soon as it appears, with the same rules as the autopilot below. The extension never presses a button. One-time setup: open `chrome://extensions`, switch on *Developer mode*, click *Load unpacked* and choose the `journalfit/extension` folder (step 5 of the app shows the exact path). Then, on the journal's site, click the green J and *Fill this tab for me*. The extension talks only to the JournalFit app on your own Mac (127.0.0.1), which must be running.
+
+10. **Submission autopilot (other way, Editorial Manager sites).** It opens a separate browser with a saved profile, so you log in yourself once (works with 2FA, CAPTCHA and university login). From then on, each page is filled and the tool moves to the next step by itself:
    - it fills the title, running title, abstract, keywords and article type;
    - it adds **every author** (pressing *Add author* when more are needed) and the **suggested reviewers** that have an email;
    - it fills the statements, word, figure and table counts, funder and grant number, and highlights;

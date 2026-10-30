@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --green: #2e7d32; --text: #1d2327; --muted: #5f6b73; --line: #dde3e7; --bg: #fff; --soft: #f3f6f4; }
+  @media (prefers-color-scheme: dark) {
+    :root { --text: #e8ecef; --muted: #a2adb5; --line: #3a4248; --bg: #1e2226; --soft: #262c30; --green: #5cb860; }
+  }
+  * { box-sizing: border-box; }
+  body { width: 340px; margin: 0; padding: 14px 16px 16px; font: 14px/1.45 -apple-system, system-ui, sans-serif;
+         color: var(--text); background: var(--bg); }
+  h1 { font-size: 16px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  h1 img { width: 20px; height: 20px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  select { width: 100%; padding: 6px; font: inherit; color: var(--text); background: var(--bg);
+           border: 1px solid var(--line); border-radius: 6px; }
+  button { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--soft); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; width: 100%; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row button { flex: 1; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  .on { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .log { margin: 10px 0 0; padding: 0; list-style: none; max-height: 220px; overflow: auto; font-size: 13px; }
+  .log li { padding: 4px 0; border-top: 1px solid var(--line); }
+  .err { color: #c62828; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1><img src="icon48.png" alt="">JournalFit</h1>
+  <p id="error" class="err hidden"></p>
+
+  <div id="offBox" class="hidden">
+    <label for="pkg">Submission to fill</label>
+    <select id="pkg"></select>
+    <p class="muted">Sign in to the journal's site and start a new submission in this tab. JournalFit then fills
+      every form page for you. You press Next and Submit yourself.</p>
+    <button id="on" class="primary">Fill this tab for me</button>
+  </div>
+
+  <div id="onBox" class="hidden">
+    <div class="on"><b>On for this tab:</b> <span id="journal"></span><br>
+      <span class="muted" id="score"></span></div>
+    <ul class="log" id="log"></ul>
+    <div class="row">
+      <button id="fill">Fill this page again</button>
+      <button id="off">Switch off</button>
+    </div>
+    <div class="row"><button id="over" title="Upload every file again, e.g. after starting a new submission">Start over</button></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

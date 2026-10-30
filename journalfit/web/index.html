@@ -75,6 +75,7 @@
                 border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
   ul.files button { padding: 2px 10px; font-size: 13px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  code { overflow-wrap: anywhere; }
   pre.doc { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
             padding: 12px; font: 14px/1.5 inherit; max-height: 380px; overflow: auto; }
   .hidden { display: none !important; }
@@ -214,6 +215,33 @@
   <!-- Step 5 -->
   <section class="card hidden" id="submitCard">
     <h2><span class="step">5</span> Fill in the journal's submission website</h2>
+    <div class="field"><label for="subUrl">Submission website</label>
+      <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/...">
+      <span class="muted" id="subHint"></span></div>
+
+    <h3>In your own Chrome, with the JournalFit extension <span class="muted" style="font-weight:normal">(works on every journal site)</span></h3>
+    <details id="extSetup"><summary>One-time setup: add the extension to Chrome (2 minutes)</summary>
+      <ol class="muted">
+        <li>In Chrome, type <code>chrome://extensions</code> in the address bar and press Enter.</li>
+        <li>Switch on <b>Developer mode</b> (top right) and click <b>Load unpacked</b>.</li>
+        <li>In the window that opens, press <b>Cmd + Shift + G</b>, paste this folder and press Enter, then click <b>Select</b>:<br>
+          <code id="extDir"></code> <button id="extCopyBtn" type="button">Copy</button></li>
+        <li>Click the puzzle-piece icon in Chrome's toolbar and pin <b>JournalFit</b> (a green J).</li>
+      </ol>
+      <div class="row"><button id="extFolderBtn">Show the extension folder in Finder</button></div>
+    </details>
+    <ol class="muted">
+      <li>Click <b>Open the submission website</b>. In Chrome, sign in and start a new submission as usual.</li>
+      <li>Click the green <b>J</b> in Chrome's toolbar, check the journal shown and click <b>Fill this tab for me</b>.</li>
+      <li>Each form page is filled as soon as it appears: title, abstract, keywords, article type, authors,
+        reviewers, statements, Yes/No questions and files. Check the page, then press the site's Next yourself.
+        If it asks you to press <b>Add author</b>, do so: the new boxes are filled straight away.</li>
+      <li>At the end, check the PDF and every detail, then click Submit yourself. JournalFit never presses a button.</li>
+    </ol>
+    <div class="row"><button class="primary" id="openChromeBtn">Open the submission website</button></div>
+
+    <details id="robotBox" style="margin-top:18px"><summary>Other way: a separate browser that also presses Next for you
+      (Editorial Manager sites only; Wiley, ScholarOne and Taylor &amp; Francis block it)</summary>
     <ol class="muted">
       <li>Click <b>Open submission website</b>. A browser window opens. Log in (only needed the first time).</li>
       <li>Start a new submission there. From then on <b>each page is filled and the tool moves to the next step
@@ -227,17 +255,15 @@
       <span>Autopilot: move to the next step by itself <span class="muted">(untick to press Next/Continue yourself)</span></span></label>
     <label class="check"><input type="checkbox" id="autoFill" checked>
       <span>Fill each page automatically <span class="muted">(untick to fill only when you click "Fill this page")</span></span></label>
-    <div class="field"><label for="subUrl">Submission website</label>
-      <input type="url" id="subUrl" placeholder="https://www.editorialmanager.com/...">
-      <span class="muted" id="subHint"></span></div>
     <div class="row">
-      <button class="primary" id="openSiteBtn">Open submission website</button>
+      <button id="openSiteBtn">Open submission website</button>
       <button id="fillBtn" disabled>Fill this page again</button>
       <button id="resumeBtn" disabled>Resume</button>
       <button id="closeSiteBtn" disabled>Close browser</button>
     </div>
     <p class="muted" id="scoreLine"></p>
     <div class="log hidden" id="assistLog" style="margin-top:14px"></div>
+    </details>
   </section>
 </main>
 
@@ -319,6 +345,7 @@ function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","
 
 async function refresh() {
   state = await api("/api/state");
+  $("extDir").textContent = state.extension_dir || "";
   $("setupCard").classList.toggle("hidden", state.data.scimago > 0);
   $("keyCard").classList.toggle("hidden", state.has_api_key);
   $("use_ai").checked = state.has_api_key;
@@ -550,6 +577,7 @@ async function runPrepare(index, name, declarations) {
         (pkg.guidelines_url ? `<a href="${esc(pkg.guidelines_url)}" target="_blank" rel="noopener">the journal's author page</a>` : "the journal's author page") +
         ", click its <b>Submit</b> button and paste that page's address here (for example an Editorial Manager, ScholarOne or Research Exchange address).";
       $("submitCard").classList.remove("hidden");
+      api("/api/ext/current", {package: pkg.package}).catch(() => {});  // offered first in the extension
     });
   } catch (e) { alert(e.message); }
 }
@@ -579,6 +607,14 @@ $("openSiteBtn").onclick = async () => {
 };
 $("autoFill").onchange = async () => { try { await api("/api/assist/auto", {on: $("autoFill").checked}); } catch (e) {} };
 $("fillBtn").onclick = async () => { try { await api("/api/assist/fill", {}); } catch (e) { alert(e.message); } };
+$("openChromeBtn").onclick = () => {
+  const url = $("subUrl").value.trim();
+  if (!/^https?:\/\//.test(url)) return alert("Enter the journal's submission website address (starting with https://).");
+  window.open(url, "_blank", "noopener");
+};
+$("extCopyBtn").onclick = () => navigator.clipboard.writeText($("extDir").textContent).then(
+  () => { $("extCopyBtn").textContent = "Copied"; }, () => {});
+$("extFolderBtn").onclick = async () => { try { await api("/api/ext/open-folder", {}); } catch (e) { alert(e.message); } };
 $("resumeBtn").onclick = async () => { try { await api("/api/assist/resume", {}); } catch (e) { alert(e.message); } };
 $("autopilot").onchange = async () => { try { await api("/api/assist/autopilot", {on: $("autopilot").checked}); } catch (e) {} };
 
