@@ -155,3 +155,31 @@ self.JF_SIGNATURE = () => {
   for (const c of names + heads) h = (h * 31 + c.charCodeAt(0)) | 0;
   return location.href.split('#')[0] + ' ' + n + ' ' + h;
 };
+self.JF_BUTTONS = (startIdx) => {
+  const out = [];
+  let idx = startIdx;
+  const txt = (n) => ((n && (n.innerText || n.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const visible = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+  };
+  const all = [];
+  const walk = (r) => {
+    r.querySelectorAll('button, input[type="submit"], input[type="button"], input[type="image"], a, [role="button"]')
+      .forEach(e => all.push(e));
+    r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
+  };
+  walk(document);
+  for (const el of all) {
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true' || !visible(el)) continue;
+    const words = [txt(el), el.value || '', el.getAttribute('title') || '', el.getAttribute('aria-label') || '',
+                   el.getAttribute('alt') || ''].filter(Boolean);
+    // Links that leave the site or open another document are never navigation buttons.
+    const href = el.tagName === 'A' ? (el.getAttribute('href') || '') : '';
+    el.setAttribute('data-jf-btn', String(idx));
+    out.push({idx: idx++, tag: el.tagName.toLowerCase(), type: (el.getAttribute('type') || '').toLowerCase(),
+              text: txt(el).slice(0, 120), words: words.map(w => w.slice(0, 160)), href: href.slice(0, 300),
+              target: el.getAttribute('target') || ''});
+  }
+  return out;
+};

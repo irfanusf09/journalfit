@@ -416,6 +416,44 @@ class LLM:
         return self.structured("You write concise, professional academic correspondence.",
                                prompt, LETTER_SCHEMA)["letter"]
 
+    def lookup_reviewer_email(self, reviewer: dict) -> str:
+        """Find a suggested reviewer's institutional email on official university or publisher pages."""
+        from .reviewers import EMAIL_RX, valid_reviewer_email
+
+        name = f"{reviewer.get('given', '')} {reviewer.get('family', '')}".strip()
+        inst = reviewer.get("institution", "")
+        if not name or not inst:
+            return ""
+        papers = "; ".join(p.get("title", "") for p in (reviewer.get("papers") or [])[:2] if p.get("title"))
+        prompt = (f"Researcher: {name}\nInstitution: {inst}\n"
+                  + (f"Recent papers: {papers}\n" if papers else "")
+                  + "Find this researcher's official institutional or academic email address from their "
+                    "university faculty profile or published papers. Never guess or construct an email from "
+                    "a pattern; if it is not explicitly written on an official page, return null.\n"
+                    'End your reply with a fenced json block:\n```json\n{"email": "str|null", "source_url": "str"}\n```')
+        system = "You extract verified contact details from official university and publisher pages only. Never guess."
+        if self.has_web:
+            text = self.with_web(system, prompt, effort="low")
+            data = _json_from_text(text)
+            em = str(data.get("email") or "").strip()
+            return em if valid_reviewer_email(em, reviewer.get("family", "")) else ""
+        if hasattr(self, "_tool") and hasattr(self, "SEARCH_URL"):
+            q = f'"{name}" "{inst}" email'
+            res = _find_list(self._tool(self.SEARCH_URL, {"query": q[:128], "count": 5}) or {})
+            blobs = []
+            for r in res[:3]:
+                snip = " ".join(str(r.get(k) or "") for k in ("title", "summary", "snippet", "description", "content"))
+                blobs.append(snip)
+                url = _clean_url(r.get("url") or r.get("link") or "")
+                if url and not EMAIL_RX.search(snip):
+                    blobs.append(self.fetch_text(url)[:10000])
+            combined = "\n".join(blobs)
+            fam = (reviewer.get("family") or "").lower()
+            for m in EMAIL_RX.findall(combined):
+                if valid_reviewer_email(m, fam) and (not fam or fam in combined.lower()):
+                    return m
+        return ""
+
 
 HIGHLIGHTS_SCHEMA = {
     "type": "object", "properties": {"highlights": {"type": "array", "items": {"type": "string"}}},
@@ -788,12 +826,18 @@ class DeepSeek(LLM):
                 trace.note(f"    DeepSeek fetch {url}: page is about a different journal, ignored")
                 continue
             trace.note(f"    DeepSeek fetch {url}: " + (f"{len(text):,} chars" if text else "no text"))
+            snip = snippets.get(url, "").strip()
             if not text:
                 # The page couldn't be opened, but the search result's own summary of it may hold the numbers.
-                snip = snippets.get(url, "").strip()
                 if snip and any(m in snip.lower() for m in marks):
                     text = f"[Search result summary of {url}] {snip}"
                     trace.note(f"    using the search result's summary instead: \"{snip[:160]}\"")
+            elif snip and any(m in snip.lower() for m in marks):
+                from .metrics.extract import extract_metrics
+
+                if not extract_metrics(text, url).sources and extract_metrics(snip, url).sources:
+                    text = f"{text}\n[Search result summary of {url}] {snip}"
+                    trace.note(f"    also keeping search result summary with metrics: \"{snip[:160]}\"")
             if text:
                 pages[url] = text
         return pages

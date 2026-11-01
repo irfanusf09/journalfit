@@ -1,6 +1,6 @@
 // Runs in every frame of a tab the author switched JournalFit on for.
-// JF_RUN applies the steps the app decided (type, choose, tick, attach). It never presses a
-// button: Next, Add author and Submit are always the author's own clicks.
+// JF_RUN applies the steps the app decided (type, choose, tick, attach, and in autopilot mode
+// safe Next / Add author / Add reviewer clicks). Submit is never clicked.
 // JF_WATCH tells the extension when the frame shows a different form page.
 
 (() => {
@@ -8,6 +8,7 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const FORBIDDEN = /submit|approv|build\s*(the\s*)?pdf|\bpdf\b|finish|complete|finali[sz]e|\bsend\b|\bpay|payment|checkout|purchase|order|delete|remove|withdraw|cancel|discard|reset|clear|log\s*-?\s*(out|off)|sign\s*-?\s*(out|off)|\bagree|\baccept|\bconsent|\bsign\b|transfer|decline|reject|\bclose\b|\bexit\b|\bquit\b|unsubscribe|upload|browse|attach|choose\s+file|select\s+file|print|download|preview|back|previous|\bprev\b|search|find|lookup|look\s+up|verify|validate|confirm|\bok\b|\byes\b|\bno\b|edit|change|start\s+new|new\s+submission|create|register|save\s+(as\s+)?draft|save\s+and\s+(close|exit)|help|contact|feedback|faq|instructions|copy|duplicate|revise|resubmit|proof/i;
 
   // Boxes inside shadow roots are found too (the page reader looks there as well).
   const find = (sel) => {
@@ -85,7 +86,14 @@
           if (!el.checked) el.click();
           if (!el.checked) { el.checked = true; fire(el, 'input', 'change'); }
         } else if (op.op === 'click') { el.focus(); el.click(); focused = el; }  // only boxes, never buttons
-        else if (op.op === 'files') attach(el, op.files);
+        else if (op.op === 'click_btn') {
+          if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+          await sleep(250);
+          const words = [el.innerText || el.textContent || '', el.value || '', el.getAttribute('title') || '',
+                         el.getAttribute('aria-label') || '', el.getAttribute('alt') || ''].join(' ');
+          if (FORBIDDEN.test(words)) throw new Error('forbidden button wording; not clicked');
+          el.click();
+        } else if (op.op === 'files') attach(el, op.files);
         else if (op.op === 'press') press(el, op.key);
         await sleep(60);  // let the site react, as it would to typing
       } catch (e) {

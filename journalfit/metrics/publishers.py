@@ -70,6 +70,30 @@ def nature_urls(j: Journal) -> list[str]:
     return [home + "/journal-impact", home] if "nature.com/" in home else homepage_urls(j)
 
 
+def sage_urls(j: Journal) -> list[str]:
+    m = re.search(r"journals\.sagepub\.com/(?:home|toc|loi)/([a-z0-9]+)", j.homepage, re.I)
+    if m:
+        code = m.group(1)
+        return [f"https://journals.sagepub.com/overview-metric/{code}", j.homepage]
+    return homepage_urls(j)
+
+
+def oup_urls(j: Journal) -> list[str]:
+    m = re.search(r"academic\.oup\.com/([a-z0-9\-]+)", j.homepage, re.I)
+    if m:
+        code = m.group(1)
+        return [f"https://academic.oup.com/{code}/pages/About", j.homepage]
+    return homepage_urls(j)
+
+
+def cambridge_urls(j: Journal) -> list[str]:
+    m = re.search(r"cambridge\.org/core/journals/([a-z0-9\-]+)", j.homepage, re.I)
+    if m:
+        slug = m.group(1)
+        return [f"https://www.cambridge.org/core/journals/{slug}/information/about-this-journal", j.homepage]
+    return homepage_urls(j)
+
+
 def homepage_urls(j: Journal) -> list[str]:
     return [j.homepage] if j.homepage else []
 
@@ -81,6 +105,9 @@ ADAPTERS: list[tuple[re.Pattern, Callable[[Journal], list[str]]]] = [
     (re.compile(r"taylor|francis|routledge", re.I), tandf_urls),
     (re.compile(r"wiley|hindawi", re.I), wiley_urls),
     (re.compile(r"mdpi|multidisciplinary digital", re.I), mdpi_urls),
+    (re.compile(r"sage", re.I), sage_urls),
+    (re.compile(r"oxford|oup\.com", re.I), oup_urls),
+    (re.compile(r"cambridge", re.I), cambridge_urls),
 ]
 
 
@@ -278,6 +305,28 @@ def find_guidelines_text(j: Journal, fetcher: PageFetcher) -> tuple[str, str]:
             if page:
                 return url, page_text(page)
     return "", ""
+
+
+PORTAL_URL_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"https?://(?:www\.)?editorialmanager\.com/[a-zA-Z0-9_\-]+/?", re.I), "Editorial Manager"),
+    (re.compile(r"https?://mc\d*\.manuscriptcentral\.com/[a-zA-Z0-9_\-]+/?", re.I), "ScholarOne"),
+    (re.compile(r"https?://submission\.springernature\.com/new-submission/\d+/[a-zA-Z0-9_\-/]*", re.I), "Snapp"),
+    (re.compile(r"https?://wiley\.atyponrex\.com/journal/[a-zA-Z0-9_\-]+", re.I), "Wiley Research Exchange"),
+    (re.compile(r"https?://rp\.tandfonline\.com/submission/create\?journalCode=[a-zA-Z0-9_\-]+", re.I),
+     "Taylor & Francis Submission Portal"),
+    (re.compile(r"https?://susy\.mdpi\.com/user/manuscripts/upload[^\s\"'<>]*", re.I), "MDPI SuSy"),
+]
+
+
+def extract_submission_url(text_or_html: str) -> tuple[str, str] | None:
+    """Detect a known submission portal URL inside guidelines or homepage HTML/text."""
+    if not text_or_html:
+        return None
+    for rx, system in PORTAL_URL_PATTERNS:
+        m = rx.search(text_or_html)
+        if m:
+            return m.group(0), system
+    return None
 
 
 def load_overrides(path=None) -> dict[str, Metrics]:

@@ -19,12 +19,23 @@ def known_submission_link(cand: Candidate) -> tuple[str, str] | None:
 
     Wiley: most journals take submissions on Research Exchange at /journal/<code>, and the code is
     the one in the journal's own DOIs (10.1111/issj.12580 -> ISSJ). Used only when the journal's
-    recent papers all agree on one code."""
-    if not re.search(r"wiley", cand.journal.publisher or "", re.I):
-        return None
-    codes = {m.group(1).upper() for w in cand.example_works if (m := WILEY_DOI.match(re.sub(r"^https?://(dx\.)?doi\.org/", "", w.get("doi") or "")))}
-    if len(codes) == 1:
-        return f"https://wiley.atyponrex.com/journal/{codes.pop()}", "Wiley Research Exchange"
+    recent papers all agree on one code.
+    Taylor & Francis / MDPI: derived directly from the journal's official homepage URL."""
+    pub = cand.journal.publisher or ""
+    home = cand.journal.homepage or ""
+    if re.search(r"wiley", pub, re.I):
+        codes = {m.group(1).upper() for w in cand.example_works
+                 if (m := WILEY_DOI.match(re.sub(r"^https?://(dx\.)?doi\.org/", "", w.get("doi") or "")))}
+        if len(codes) == 1:
+            return f"https://wiley.atyponrex.com/journal/{codes.pop()}", "Wiley Research Exchange"
+    if re.search(r"taylor|francis|routledge", pub, re.I) or "tandfonline.com" in home.lower():
+        m = re.search(r"tandfonline\.com/(?:toc|loi|journals)/([a-z0-9]+)", home, re.I)
+        if m:
+            return f"https://rp.tandfonline.com/submission/create?journalCode={m.group(1)}", "Taylor & Francis Submission Portal"
+    if re.search(r"mdpi|multidisciplinary digital", pub, re.I) or "mdpi.com" in home.lower():
+        m = re.search(r"mdpi\.com/journal/([a-z0-9\-]+)", home, re.I)
+        if m:
+            return f"https://susy.mdpi.com/user/manuscripts/upload?journal={m.group(1)}", "MDPI SuSy"
     return None
 
 
@@ -48,9 +59,9 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         shutil.copy2(f, supp_dir / Path(f).name)
 
     guide: dict = {}
+    page = ""
     if llm:
         try:
-            page = ""
             if not llm.has_web:  # e.g. DeepSeek: find and read the guidelines page ourselves
                 from .http import HttpClient
                 from .metrics.publishers import PageFetcher, find_guidelines_text
@@ -70,6 +81,13 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
         _write_docx(out / "cover_letter.docx", letter)
         (out / "cover_letter.txt").write_text(letter, encoding="utf-8")
 
+    if not guide.get("submission_url") and page:
+        from .metrics.publishers import extract_submission_url
+
+        found_link = extract_submission_url(page)
+        if found_link:
+            guide["submission_url"], guide["submission_system"] = found_link
+
     if not guide.get("submission_url"):
         link = known_submission_link(cand)
         if link:
@@ -82,6 +100,11 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
     made = make_files(ms, out, guide, llm, author, declarations, authors, say)
     if reviewers is None:
         reviewers = suggest_reviewers(ms, cand, made["authors"], guide, http, say)
+        if reviewers and any(not r.get("email") for r in reviewers):
+            from . import reviewers as reviewers_mod
+            from .http import HttpClient
+
+            reviewers_mod.fill_reviewer_emails(reviewers, http=http or HttpClient(), llm=llm, log=say)
     # Kept with their papers and record, for the author to judge (people.load reads what forms need).
     (out / "reviewers.json").write_text(json.dumps(reviewers, indent=2, ensure_ascii=False), encoding="utf-8")
 

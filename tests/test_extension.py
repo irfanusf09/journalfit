@@ -50,6 +50,27 @@ def test_remote_page_records_steps_instead_of_touching_a_browser(tmp_path):
     again = s.fill("https://journal.example/submit", [{"frameId": 0, "start": 0, "fields": fields, "text": "", "sig": "a"}])
     assert any(op["op"] == "files" for op in again["frames"][0]["ops"])
 
+    # With autopilot=True, safe Next / Add Co-Author buttons are queued, while Submit / Build PDF never are.
+    btns = [
+        {"idx": 0, "tag": "button", "type": "button", "text": "Save & Continue", "words": ["Save & Continue"],
+         "href": "", "target": ""},
+        {"idx": 1, "tag": "button", "type": "submit", "text": "Submit Manuscript", "words": ["Submit Manuscript"],
+         "href": "", "target": ""},
+    ]
+    auto_out = s.fill("https://journal.example/step1", [
+        {"frameId": 0, "start": 0, "fields": [fields[0]], "buttons": btns, "text": "", "sig": "step1"}],
+        autopilot=True)
+    assert auto_out["nav"] == "next"
+    assert auto_out["frames"][0]["ops"][-1] == {"op": "click_btn", "sel": '[data-jf-btn="0"]',
+                                                "label": "Save & Continue"}
+    # On the review page, autopilot pauses and queues no button click.
+    rev_out = s.fill("https://journal.example/review", [
+        {"frameId": 0, "start": 0, "fields": [], "buttons": [btns[1]],
+         "text": "Review & Submit your submission", "sig": "rev"}],
+        autopilot=True)
+    assert rev_out["nav"] == "paused" and rev_out["frames"] == []
+    assert any("review / approval page" in line for line in rev_out["log"])
+
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):

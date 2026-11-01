@@ -47,6 +47,8 @@ class Finder:
 
     # ---------------------------------------------------------------- stage 1
     def gather_works(self, ms: Manuscript, criteria: Criteria) -> tuple[list[Work], set[str], list[str]]:
+        from concurrent.futures import ThreadPoolExecutor
+
         publisher_ids = self.oa.resolve_publishers(criteria.publishers) if criteria.publishers else None
         queries = list(ms.search_queries)
         if ms.title:
@@ -59,13 +61,24 @@ class Finder:
 
         works: dict[str, Work] = {}
         failures = 0
-        for q in queries:
-            try:
-                for w in self.oa.search_works(q, criteria.years, publisher_ids):
-                    works.setdefault(w.id, w)
-            except FetchError as e:
-                failures += 1
-                self.log(f"  search failed for '{q}': {e}")
+        if len(queries) > 1 and isinstance(self.http, HttpClient):
+            with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+                futs = [(q, pool.submit(self.oa.search_works, q, criteria.years, publisher_ids)) for q in queries]
+                for q, fut in futs:
+                    try:
+                        for w in fut.result():
+                            works.setdefault(w.id, w)
+                    except FetchError as e:
+                        failures += 1
+                        self.log(f"  search failed for '{q}': {e}")
+        else:
+            for q in queries:
+                try:
+                    for w in self.oa.search_works(q, criteria.years, publisher_ids):
+                        works.setdefault(w.id, w)
+                except FetchError as e:
+                    failures += 1
+                    self.log(f"  search failed for '{q}': {e}")
         if failures == len(queries):
             raise RuntimeError("Could not reach OpenAlex (api.openalex.org). Check your internet connection or proxy.")
         ref_works = self.oa.works_by_doi(ms.reference_dois) if ms.reference_dois else []
@@ -170,6 +183,30 @@ class Finder:
         return ""
 
     # ---------------------------------------------------------------- stage 3
+    def _warm_metrics_cache(self, cands: list[Candidate]) -> None:
+        """Pre-fetch publisher metric pages and Crossref speed data in parallel into HttpClient's cache."""
+        if not isinstance(self.http, HttpClient) or len(cands) <= 1:
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        from .metrics.publishers import candidate_urls
+
+        def warm_one(c: Candidate) -> None:
+            j = c.journal
+            for url in candidate_urls(j):
+                try:
+                    self.http.get_text(url)
+                except Exception:
+                    pass
+            for issn in j.issns[:2]:
+                try:
+                    review_speed(issn, self.http)
+                except Exception:
+                    pass
+
+        with ThreadPoolExecutor(max_workers=min(6, len(cands))) as pool:
+            list(pool.map(warm_one, cands))
+
     def collect_metrics(self, cands: list[Candidate], criteria: Criteria, web_lookup: bool,
                         lookup_top: int = 8) -> None:
         """Overrides, then publisher pages, then (for the best `lookup_top` only) an AI lookup.
@@ -178,6 +215,7 @@ class Finder:
         """
         overrides = load_overrides()
         cache = MetricCache()
+        self._warm_metrics_cache(cands)
         for i, c in enumerate(cands, 1):
             j = c.journal
             self.log(f"  [{i}/{len(cands)}] metrics: {j.name}")

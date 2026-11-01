@@ -190,6 +190,103 @@ def suggest(http: HttpClient, queries: list[str], authors: list[dict], n: int = 
     return out
 
 
+GENERIC_EMAIL = re.compile(
+    r"^(info|contact|office|admin|support|help|editor|editorial|permissions|press|media|sales|webmaster|"
+    r"enquiries|inquiries|subscriptions|marketing|postmaster|noreply|no-reply|dean|department|hod)@",
+    re.I,
+)
+EMAIL_RX = re.compile(r"\b([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,12})\b")
+
+
+def valid_reviewer_email(email: str, family: str = "") -> bool:
+    """True for a personal/institutional email, never a generic office address or example placeholder."""
+    email = (email or "").strip().rstrip(".,;:)>]")
+    if not EMAIL_RX.fullmatch(email):
+        return False
+    low = email.lower()
+    if GENERIC_EMAIL.search(low):
+        return False
+    domain = low.split("@", 1)[1]
+    if domain.endswith((".example", ".test", ".invalid", ".png", ".jpg", ".pdf", ".docx")):
+        return False
+    return True
+
+
+def orcid_email(http: HttpClient, orcid: str) -> str:
+    """Public email from the researcher's own ORCID record, if they shared one."""
+    orcid = re.sub(r"^https?://orcid\.org/", "", (orcid or "").strip())
+    if not orcid or not isinstance(http, HttpClient):
+        return ""
+    try:
+        data = http.get_json(f"https://pub.orcid.org/v3.0/{orcid}/email")
+    except Exception:
+        return ""
+    for row in (data or {}).get("email") or []:
+        em = str((row or {}).get("email") or "").strip()
+        if valid_reviewer_email(em):
+            return em
+    return ""
+
+
+def crossref_email_from_dois(http: HttpClient, dois: list[str], family: str) -> str:
+    """Check if Crossref metadata for the reviewer's recent papers lists their email."""
+    if not isinstance(http, HttpClient) or not dois or not family:
+        return ""
+    import json
+
+    fam = _norm(family)
+    for doi in dois[:3]:
+        clean = re.sub(r"^https?://(dx\.)?doi\.org/", "", (doi or "").strip())
+        if not clean:
+            continue
+        try:
+            data = http.get_json(f"https://api.crossref.org/works/{clean}")
+        except Exception:
+            continue
+        msg = (data or {}).get("message") or {}
+        for au in msg.get("author") or []:
+            if _norm(au.get("family", "")) == fam:
+                for m in EMAIL_RX.findall(json.dumps(au)):
+                    if valid_reviewer_email(m, family):
+                        return m
+    return ""
+
+
+def fill_reviewer_emails(reviewers: list[dict], http: HttpClient | None = None, llm=None, log=None) -> list[dict]:
+    """Populate missing reviewer emails from the address book, ORCID, Crossref, or verified AI web lookup."""
+    say = log or (lambda m: None)
+    book = people.address_book(config.DATA_DIR / "people.json")
+    for r in reviewers:
+        if r.get("email"):
+            continue
+        key = re.sub(r"[^a-z]", "", (r.get("given", "")[:1] + r.get("family", "")).lower())
+        if key in book and book[key].get("email"):
+            r["email"] = book[key]["email"]
+            continue
+        if http and r.get("orcid"):
+            em = orcid_email(http, r["orcid"])
+            if em:
+                r["email"] = em
+                say(f"  Found email for {r.get('given', '')} {r.get('family', '')} via ORCID: {em}")
+                continue
+        if http and r.get("papers"):
+            dois = [p.get("doi") for p in r["papers"] if p.get("doi")]
+            em = crossref_email_from_dois(http, dois, r.get("family", ""))
+            if em:
+                r["email"] = em
+                say(f"  Found email for {r.get('given', '')} {r.get('family', '')} via Crossref: {em}")
+                continue
+        if llm and hasattr(llm, "lookup_reviewer_email"):
+            try:
+                em = llm.lookup_reviewer_email(r)
+                if em and valid_reviewer_email(em, r.get("family", "")):
+                    r["email"] = em
+                    say(f"  Found email for {r.get('given', '')} {r.get('family', '')} via web lookup: {em}")
+            except Exception:
+                pass
+    return reviewers
+
+
 COUNTRIES = {"US": "United States", "GB": "United Kingdom", "IN": "India", "CN": "China", "DE": "Germany",
              "FR": "France", "IT": "Italy", "ES": "Spain", "CA": "Canada", "AU": "Australia", "JP": "Japan",
              "KR": "Korea, Republic of", "NL": "Netherlands", "BR": "Brazil", "PK": "Pakistan",

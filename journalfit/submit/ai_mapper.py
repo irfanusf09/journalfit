@@ -13,15 +13,27 @@ import re
 ITEM_HELP = {
     "title": "the full manuscript title",
     "running_title": "a short/running title",
-    "abstract": "the abstract",
-    "keywords": "the keywords, separated by semicolons",
+    "abstract": "the abstract (or choose the matching subject/topic classification option from a list)",
+    "keywords": "the keywords, separated by semicolons (or choose the matching subject/topic classification option from a list)",
     "cover_letter": "the cover letter text (only for a box that asks for a cover letter or comments to the editor)",
     "article_type": "the article type (choose the matching option from the list)",
     "competing_interests": "the competing-interests / conflict-of-interest statement",
     "funding_statement": "the funding statement (a text box, not a funder search box)",
+    "funder_name": "the funding organisation / sponsor name",
+    "grant_number": "the grant or award number",
     "data_availability": "the data availability statement",
     "ethics": "the ethics approval / consent statement",
-    "author_contributions": "the author contributions statement",
+    "author_contributions": "the author contributions / CRediT statement",
+    "acknowledgements": "the acknowledgements statement",
+    "ai_disclosure": "the generative AI / LLM disclosure statement",
+    "preprint": "the preprint declaration or statement",
+    "previous_submission": "the previous / prior submission statement",
+    "highlights": "the manuscript highlights",
+    "word_count": "the manuscript word count (number)",
+    "abstract_words": "the abstract word count (number)",
+    "figure_count": "the number of figures (number)",
+    "table_count": "the number of tables (number)",
+    "reference_count": "the number of references (number)",
     "confirm": "standard confirmations the author has agreed to (tick boxes stating exactly these only)",
 }
 SCHEMA = {
@@ -69,7 +81,10 @@ def make_mapper(llm, log=None):
         items = []
         for k, v in available.items():
             shown = v if k in ("article_type", "competing_interests", "funding_statement", "data_availability",
-                               "ethics", "author_contributions", "confirm") else (v[:80] + "..." if len(v) > 80 else v)
+                               "ethics", "author_contributions", "confirm", "ai_disclosure", "preprint",
+                               "previous_submission", "funder_name", "grant_number", "word_count",
+                               "abstract_words", "figure_count", "table_count", "reference_count") else (
+                                   v[:140] + "..." if len(v) > 140 else v)
             items.append(f"- {k}: {ITEM_HELP[k]}. Value: {shown}")
         prompt = (
             "Items the author has prepared:\n" + "\n".join(items) + "\n\n"
@@ -80,8 +95,8 @@ def make_mapper(llm, log=None):
             "reviewers), search boxes, page navigation, filters, 'results per page', and anything the items "
             "don't cover.\n"
             "- For a list (select), set \"option\" to the exact option text to choose, only if the item's value "
-            "clearly settles it (e.g. the article type, or a yes/no question answered by a declaration). "
-            "Otherwise use \"none\".\n"
+            "clearly settles it (e.g. the article type, a subject/topic classification settled by keywords/abstract, "
+            "or a yes/no question answered by a declaration). Otherwise use \"none\".\n"
             "- For a radio question, set \"option\" to the exact option text, only if a declaration clearly "
             "answers it (e.g. 'Do you have competing interests?' -> 'No' when the declaration says none).\n"
             "- For a tick box (checkbox), use item \"confirm\" only if its text is one of the standard "

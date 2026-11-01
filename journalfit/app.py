@@ -577,7 +577,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if u.path == "/api/ext/fill":
                 s = EXTENSION.session(body["package"])
-                return self._json(s.fill(str(body.get("url") or ""), body.get("frames") or []))
+                return self._json(s.fill(str(body.get("url") or ""), body.get("frames") or [],
+                                         autopilot=bool(body.get("autopilot"))))
             if u.path == "/api/ext/failed":
                 EXTENSION.session(body["package"]).failed(body.get("paths") or [], body.get("errors") or [])
                 return self._json({"ok": True})

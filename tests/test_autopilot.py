@@ -332,11 +332,13 @@ def test_security_check_page_is_never_touched(tmp_path, monkeypatch):
 
 
 def test_wiley_submission_link_from_the_journals_doi_code():
+    from journalfit.metrics.publishers import extract_submission_url
     from journalfit.models import Candidate, Journal
     from journalfit.prepare import known_submission_link
 
-    def cand(publisher, dois):
-        return Candidate(journal=Journal(openalex_id="S1", name="International Social Science Journal", publisher=publisher),
+    def cand(publisher, dois, homepage=""):
+        return Candidate(journal=Journal(openalex_id="S1", name="International Social Science Journal",
+                                         publisher=publisher, homepage=homepage),
                          example_works=[{"doi": d} for d in dois])
 
     assert known_submission_link(cand("Wiley", ["10.1111/issj.12580", "https://doi.org/10.1111/issj.12476"])) == \
@@ -344,3 +346,47 @@ def test_wiley_submission_link_from_the_journals_doi_code():
     assert known_submission_link(cand("Wiley", ["10.1111/1477-8947.70049"])) is None  # no code in the DOI
     assert known_submission_link(cand("Wiley", ["10.1111/issj.1", "10.1002/bse.2"])) is None  # codes disagree
     assert known_submission_link(cand("Springer", ["10.1111/issj.12580"])) is None
+    assert known_submission_link(cand("Taylor & Francis", [], "https://www.tandfonline.com/toc/raec20/current")) == \
+        ("https://rp.tandfonline.com/submission/create?journalCode=raec20", "Taylor & Francis Submission Portal")
+    assert known_submission_link(cand("MDPI", [], "https://www.mdpi.com/journal/sustainability")) == \
+        ("https://susy.mdpi.com/user/manuscripts/upload?journal=sustainability", "MDPI SuSy")
+    assert extract_submission_url('<a href="https://www.editorialmanager.com/jclepro/default.aspx">Submit</a>') == \
+        ("https://www.editorialmanager.com/jclepro/", "Editorial Manager")
+    assert extract_submission_url('Submit at https://mc.manuscriptcentral.com/jcr today') == \
+        ("https://mc.manuscriptcentral.com/jcr", "ScholarOne")
+
+
+def test_reviewer_email_discovery_filters_generic_and_uses_verified_sources(tmp_path, monkeypatch):
+    from journalfit import config, reviewers
+    from journalfit.http import HttpClient
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    assert reviewers.valid_reviewer_email("anna.becker@uni-bonn.de", "Becker")
+    assert not reviewers.valid_reviewer_email("info@uni-bonn.de", "Becker")
+    assert not reviewers.valid_reviewer_email("permissions@wiley.com", "Becker")
+    assert not reviewers.valid_reviewer_email("anna@uni.example", "Becker")
+
+    class FakeHttpClient(HttpClient):
+        def __init__(self):
+            pass
+
+        def get_json(self, url, params=None, ttl=None):
+            if "pub.orcid.org" in url:
+                return {"email": [{"email": "info@uni.de"}, {"email": "a.becker@uni-bonn.de"}]}
+            if "api.crossref.org/works/10.1/lind" in url:
+                return {"message": {"author": [{"family": "Lind", "affiliation": [{"name": "hugo.lind@lu.se"}]}]}}
+            return {}
+
+    class FakeLLM:
+        def lookup_reviewer_email(self, r):
+            return "m.garcia@uv.es" if r.get("family") == "Garcia" else "editor@journal.org"
+
+    revs = [
+        {"given": "Anna", "family": "Becker", "email": "", "orcid": "0000-0002-1825-0097", "institution": "Bonn"},
+        {"given": "Hugo", "family": "Lind", "email": "", "papers": [{"doi": "10.1/lind"}], "institution": "Lund"},
+        {"given": "Maria", "family": "Garcia", "email": "", "institution": "Valencia"},
+        {"given": "Carl", "family": "Diaz", "email": "", "institution": "Oslo"},
+    ]
+    reviewers.fill_reviewer_emails(revs, http=FakeHttpClient(), llm=FakeLLM())
+    assert [r["email"] for r in revs] == ["a.becker@uni-bonn.de", "hugo.lind@lu.se", "m.garcia@uv.es", ""]
+

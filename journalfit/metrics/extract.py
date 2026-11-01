@@ -20,19 +20,22 @@ GAP = r"[^0-9%]{0,60}?"  # label-to-value gap without crossing another number
 
 FIRST_DECISION = [
     rf"submission to first (?:editorial )?decision{GAP}{NUM}\s*{UNIT}",
-    rf"(?:time|days) to first (?:editorial )?decision{GAP}{NUM}\s*{UNIT}?",
-    rf"first decision{GAP}{NUM}\s*{UNIT}",
-    rf"review time{GAP}{NUM}\s*{UNIT}",
+    rf"(?:time|days|duration|speed) to first (?:editorial |peer[- ]review )?decision{GAP}{NUM}\s*{UNIT}?",
+    rf"first (?:editorial )?decision{GAP}{NUM}\s*{UNIT}",
+    rf"(?:peer[- ]?)?review time{GAP}{NUM}\s*{UNIT}",
     rf"submission to decision{GAP}{NUM}\s*{UNIT}",
-    rf"{NUM}\s*{UNIT}\s*(?:from )?submission to first decision",
+    rf"turnaround time{GAP}{NUM}\s*{UNIT}",
+    rf"{NUM}\s*{UNIT}\s*(?:from )?(?:submission )?to first (?:editorial )?decision",
 ]
 ACCEPTANCE_TIME = [
     rf"submission to acceptance{GAP}{NUM}\s*{UNIT}",
-    rf"(?:time|days) to acceptance{GAP}{NUM}\s*{UNIT}?",
+    rf"(?:time|days) to (?:final )?acceptance{GAP}{NUM}\s*{UNIT}?",
+    rf"{NUM}\s*{UNIT}\s*(?:from )?submission to acceptance",
 ]
 ACCEPTANCE_RATE = [
-    rf"acceptance rate{GAP}{NUM}\s*%",
-    rf"{NUM}\s*%\s*acceptance rate",
+    rf"accept(?:ance)? rate{GAP}{NUM}\s*%",
+    rf"{NUM}\s*%\s*accept(?:ance)? rate",
+    rf"accepts?\s+(?:around|about|approximately)?\s*{NUM}\s*%\s*of\s*(?:submitted\s+|all\s+)?(?:manuscripts|papers|articles|submissions)",
 ]
 # Years often sit between the label and the value ("CiteScore 2025: 9.8", "Impact Factor (2024) 5.2").
 YEAR = r"(?:[\s:(\[]*(?:19|20)\d{2}[\s:)\]]*)?"
