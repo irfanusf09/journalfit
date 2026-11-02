@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 submissions/
 *.journalfit-cache.sqlite
+.DS_Store

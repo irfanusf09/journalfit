@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const send = (msg) => chrome.runtime.sendMessage(msg);
 let tabId = null;
+let savingAuto = false;
 
 function showError(text) {
   $('error').textContent = text || '';
@@ -9,15 +10,28 @@ function showError(text) {
 
 async function refresh() {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  if (!tab) return;
   tabId = tab.id;
   const s = await send({type: 'state', tabId});
+  if (!s) return;
+  // If Chrome is still running an older background service worker in memory, reload it automatically.
+  if (s.bgVersion !== '0.3.0') {
+    chrome.runtime.reload();
+    return;
+  }
   showError(s.error);
   $('onBox').classList.toggle('hidden', !s.tab);
   $('offBox').classList.toggle('hidden', !!s.tab || !s.packages.length);
   if (!s.error && !s.packages.length) showError('No prepared submissions yet. In JournalFit, choose a journal and prepare its package first.');
   if (s.tab) {
     $('journal').textContent = s.tab.journal || '';
-    if ($('autoOn')) $('autoOn').checked = !!s.tab.autopilot;
+    if (s.tab.autopilot === undefined && !savingAuto) {
+      savingAuto = true;
+      await send({type: 'set-autopilot', tabId, autopilot: true});
+      savingAuto = false;
+      s.tab.autopilot = true;
+    }
+    if ($('autoOn') && !savingAuto) $('autoOn').checked = !!s.tab.autopilot;
     const sc = s.tab.score;
     $('score').textContent = sc && sc.percent !== null && sc.percent !== undefined ?
       `So far: ${sc.filled} box(es) filled by JournalFit, ${sc.left_for_you} left for you (${sc.percent}% done for you).` : '';
@@ -46,13 +60,21 @@ $('on').onclick = async () => {
   }
   const o = $('pkg').selectedOptions[0];
   const autopilot = $('autoStart') ? $('autoStart').checked : true;
+  savingAuto = true;
   await send({type: 'switch-on', tabId, package: o.value, journal: o.dataset.journal, autopilot});
-  setTimeout(refresh, 300);
+  savingAuto = false;
+  refresh();
 };
 if ($('autoOn')) {
   $('autoOn').onchange = async () => {
-    await send({type: 'set-autopilot', tabId, autopilot: $('autoOn').checked});
-    setTimeout(refresh, 300);
+    savingAuto = true;
+    const want = $('autoOn').checked;
+    try {
+      await send({type: 'set-autopilot', tabId, autopilot: want});
+    } finally {
+      savingAuto = false;
+    }
+    refresh();
   };
 }
 $('off').onclick = async () => { await send({type: 'switch-off', tabId}); $('pkg').innerHTML = ''; refresh(); };

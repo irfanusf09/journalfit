@@ -9,16 +9,15 @@ git branch -M main
 git reset --soft origin/main
 git add -A
 if ! git diff --cached --quiet; then
-  git commit -m "Increase journal discovery and submission automation to 95%+"
+  git commit -m "Fix Chrome extension Autopilot toggle, service worker auto-reload, and two-phase form filling"
 fi
 
 echo "2. Pushing updates to GitHub (origin/main)..."
 git push -u origin main
 
-if [ -d "/Users/irfanyousf/journalfit/.git" ]; then
-  echo "3. Syncing your local /Users/irfanyousf/journalfit clone..."
-  cd "/Users/irfanyousf/journalfit"
-  git pull --ff-only origin main || true
+if [ -d "/Users/irfanyousf/journalfit" ]; then
+  echo "3. Syncing your local /Users/irfanyousf/journalfit folder..."
+  rsync -a --exclude='.git' "$SRC/" "/Users/irfanyousf/journalfit/"
 fi
 
 echo ""

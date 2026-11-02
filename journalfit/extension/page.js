@@ -4,8 +4,6 @@
 // JF_WATCH tells the extension when the frame shows a different form page.
 
 (() => {
-  if (self.JF_RUN) return;  // already set up in this frame
-
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const FORBIDDEN = /submit|approv|build\s*(the\s*)?pdf|\bpdf\b|finish|complete|finali[sz]e|\bsend\b|\bpay|payment|checkout|purchase|order|delete|remove|withdraw|cancel|discard|reset|clear|log\s*-?\s*(out|off)|sign\s*-?\s*(out|off)|\bagree|\baccept|\bconsent|\bsign\b|transfer|decline|reject|\bclose\b|\bexit\b|\bquit\b|unsubscribe|upload|browse|attach|choose\s+file|select\s+file|print|download|preview|back|previous|\bprev\b|search|find|lookup|look\s+up|verify|validate|confirm|\bok\b|\byes\b|\bno\b|edit|change|start\s+new|new\s+submission|create|register|save\s+(as\s+)?draft|save\s+and\s+(close|exit)|help|contact|feedback|faq|instructions|copy|duplicate|revise|resubmit|proof/i;
@@ -33,7 +31,9 @@
       document.execCommand('insertText', false, value);
     } else {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) desc.set.call(el, value);
+      else el.value = value;
       fire(el, 'input', 'change');
     }
   };
@@ -61,7 +61,6 @@
   const press = (el, key) => {
     el.focus();
     for (const type of ['keydown', 'keypress', 'keyup']) {
-      // keyCode/which given when the event is made, so the page's own code sees them too.
       el.dispatchEvent(new KeyboardEvent(type, {key, code: key, keyCode: CODES[key] || 0, which: CODES[key] || 0,
                                                 bubbles: true, cancelable: true}));
     }
@@ -78,6 +77,7 @@
           document.execCommand('insertText', false, op.value);
           continue;
         }
+        if (op.op === 'click_btn' && failed.length > 0) continue;  // never advance if a field failed
         const el = find(op.sel);
         if (!el) throw new Error('box no longer on the page');
         if (op.op === 'fill') setValue(el, op.value);
@@ -88,7 +88,7 @@
         } else if (op.op === 'click') { el.focus(); el.click(); focused = el; }  // only boxes, never buttons
         else if (op.op === 'click_btn') {
           if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-          await sleep(250);
+          await sleep(150);
           const words = [el.innerText || el.textContent || '', el.value || '', el.getAttribute('title') || '',
                          el.getAttribute('aria-label') || '', el.getAttribute('alt') || ''].join(' ');
           if (FORBIDDEN.test(words)) throw new Error('forbidden button wording; not clicked');
