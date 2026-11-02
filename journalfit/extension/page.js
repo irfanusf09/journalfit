@@ -73,8 +73,20 @@
       try {
         if (op.op === 'wait') { await sleep(op.ms); continue; }
         if (op.op === 'insert') {
-          (focused || document.activeElement || document.body).focus();
+          const target = focused || document.activeElement || document.body;
+          target.focus();
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (e) {}
           document.execCommand('insertText', false, op.value);
+          if (!norm(target.innerText || target.textContent)) {
+            target.textContent = op.value;
+            fire(target, 'input', 'change', 'blur');
+          }
           continue;
         }
         if (op.op === 'click_btn' && failed.length > 0) continue;  // never advance if a field failed

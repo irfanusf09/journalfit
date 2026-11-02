@@ -325,7 +325,13 @@ def extract_submission_url(text_or_html: str) -> tuple[str, str] | None:
     for rx, system in PORTAL_URL_PATTERNS:
         m = rx.search(text_or_html)
         if m:
-            return m.group(0), system
+            url = re.sub(
+                r"(rp\.tandfonline\.com/submission/create\?journalCode=)([a-zA-Z]+)\d*",
+                lambda hit: hit.group(1) + hit.group(2).upper(),
+                m.group(0),
+                flags=re.I,
+            )
+            return url, system
     return None
 
 

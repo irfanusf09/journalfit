@@ -14,13 +14,26 @@ from .models import Candidate, Manuscript
 WILEY_DOI = re.compile(r"^10\.(?:1111|1002)/([a-z]{2,8})\.\d", re.I)
 
 
+def clean_submission_url(url: str) -> str:
+    """Fix known portal URL quirks (e.g. T&F's rp.tandfonline.com uses the 4-letter code without trailing digits)."""
+    if not url:
+        return ""
+    m = re.match(r"^(https?://rp\.tandfonline\.com/submission/create\?journalCode=)([a-zA-Z]+)\d*(.*)$",
+                 url.strip(), re.I)
+    if m:
+        return f"{m.group(1)}{m.group(2).upper()}{m.group(3)}"
+    return url.strip()
+
+
 def known_submission_link(cand: Candidate) -> tuple[str, str] | None:
     """The submission site when the guidelines didn't give it and the publisher's pattern is known.
 
     Wiley: most journals take submissions on Research Exchange at /journal/<code>, and the code is
     the one in the journal's own DOIs (10.1111/issj.12580 -> ISSJ). Used only when the journal's
     recent papers all agree on one code.
-    Taylor & Francis / MDPI: derived directly from the journal's official homepage URL."""
+    Taylor & Francis / MDPI: derived directly from the journal's official homepage URL.
+    Note: T&F journal URLs on tandfonline.com append a 2-digit platform suffix (e.g. raec20),
+    whereas rp.tandfonline.com/submission/create?journalCode= requires the 4-letter code (RAEC)."""
     pub = cand.journal.publisher or ""
     home = cand.journal.homepage or ""
     if re.search(r"wiley", pub, re.I):
@@ -31,7 +44,9 @@ def known_submission_link(cand: Candidate) -> tuple[str, str] | None:
     if re.search(r"taylor|francis|routledge", pub, re.I) or "tandfonline.com" in home.lower():
         m = re.search(r"tandfonline\.com/(?:toc|loi|journals)/([a-z0-9]+)", home, re.I)
         if m:
-            return f"https://rp.tandfonline.com/submission/create?journalCode={m.group(1)}", "Taylor & Francis Submission Portal"
+            code = re.sub(r"\d+$", "", m.group(1)).upper()
+            if code:
+                return f"https://rp.tandfonline.com/submission/create?journalCode={code}", "Taylor & Francis Submission Portal"
     if re.search(r"mdpi|multidisciplinary digital", pub, re.I) or "mdpi.com" in home.lower():
         m = re.search(r"mdpi\.com/journal/([a-z0-9\-]+)", home, re.I)
         if m:
@@ -94,6 +109,8 @@ def build_package(ms: Manuscript, cand: Candidate, llm, author: dict, out_root: 
             guide["submission_url"], guide["submission_system"] = link
             guide["submission_url_note"] = ("Worked out from the journal's article codes: check that the page "
                                             "shows this journal's name.")
+    if guide.get("submission_url"):
+        guide["submission_url"] = clean_submission_url(guide["submission_url"])
 
     say = log or (lambda m: None)
     declarations = dict(declarations or {})

@@ -6,9 +6,18 @@
 // (page.js). When autopilot is enabled, safe Next and Add author/reviewer buttons are also
 // clicked automatically after the page settles; Submit is never pressed.
 
-const BG_VERSION = '0.3.0';
+const BG_VERSION = '0.3.2';
 const PORTS = Array.from({length: 20}, (_, i) => 8765 + i);
 let app = null;  // {base, token}
+
+function cleanPortalUrl(url) {
+  if (!url) return '';
+  const m = url.match(/^(https?:\/\/rp\.tandfonline\.com\/submission\/create\?journalCode=)([a-zA-Z]+)\d+(.*)$/i);
+  if (m) return `${m[1]}${m[2].toUpperCase()}${m[3]}`;
+  const m2 = url.match(/^(https?:\/\/rp\.tandfonline\.com\/submission\/create\?journalCode=)([a-z]+)(.*)$/);
+  if (m2) return `${m2[1]}${m2[2].toUpperCase()}${m2[3]}`;
+  return url;
+}
 
 // Loaded from the JournalFit folder (Developer mode): when JournalFit has been updated, load the
 // new files instead of running the old copy until the author reloads it by hand.
@@ -150,6 +159,12 @@ async function fill(tabId, manual) {
     const sig = snap.map((s) => s.sig).join('|');
     if (!manual && sig === st.lastSig && !st.pending) return;  // this page was filled already
     const tab = await chrome.tabs.get(tabId);
+    const fixedUrl = cleanPortalUrl(tab.url || '');
+    if (fixedUrl && fixedUrl !== tab.url) {
+      await patchTab(tabId, {lastSig: '', log: [`Redirecting to ${fixedUrl}...`]});
+      await chrome.tabs.update(tabId, {url: fixedUrl});
+      return;
+    }
 
     // Phase 1: Fill all recognised boxes on the page first (without clicking buttons yet).
     const res = await api('/api/ext/fill', {package: st.package, url: tab.url, frames: snap, autopilot: false});

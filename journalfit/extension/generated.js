@@ -34,7 +34,8 @@ self.JF_COLLECT = (startIdx) => {
     for (let depth = 0; depth < 6 && node; depth++) {
       let sib = node.previousElementSibling, hops = 0;
       while (sib && hops < 3) {
-        if (!sib.matches('input, textarea, select, style, script, link, meta, head, noscript') && txt(sib)) {
+        if (!sib.querySelector('input, textarea, select, [contenteditable="true"]') &&
+            !sib.matches('input, textarea, select, style, script, link, meta, head, noscript') && txt(sib)) {
           add(txt(sib).slice(0, 160)); break;
         }
         sib = sib.previousElementSibling; hops++;

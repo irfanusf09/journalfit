@@ -54,7 +54,8 @@ COLLECT_JS = r"""
     for (let depth = 0; depth < 6 && node; depth++) {
       let sib = node.previousElementSibling, hops = 0;
       while (sib && hops < 3) {
-        if (!sib.matches('input, textarea, select, style, script, link, meta, head, noscript') && txt(sib)) {
+        if (!sib.querySelector('input, textarea, select, [contenteditable="true"]') &&
+            !sib.matches('input, textarea, select, style, script, link, meta, head, noscript') && txt(sib)) {
           add(txt(sib).slice(0, 160)); break;
         }
         sib = sib.previousElementSibling; hops++;
@@ -316,14 +317,20 @@ def match_bits(bits: list[str], is_file: bool) -> str | None:
     """The nearest label text decides: a field's own label beats text further away on the page.
 
     Any person-detail wording close to the field (its own label, name or the text just before it)
-    rules it out, so an author's "Title (Dr/Prof)" box never gets the manuscript title.
+    rules out 'title', so an author's "Title (Dr/Prof)" box never gets the manuscript title.
     """
+    from . import people as people_mod
+
     words = list(map(words_of, bits))
-    if not is_file and any(PERSON_FIELD.search(w) for w in words[:4]):
+    if not is_file and people_mod.is_person_field(bits):
         return None
+    person_near = not is_file and any(PERSON_FIELD.search(w) for w in words[:4])
     for bit in words:
         for key, rx in (FILE_RULES if is_file else FIELD_RULES):
             if rx.search(bit):
+                if key in ("title", "running_title") and person_near and not re.search(
+                        r"manuscript|article|paper|submission|running|short", bit, re.I):
+                    continue
                 return key
     return None
 
@@ -623,7 +630,10 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
             ai_option = None
             if f["idx"] in ai and not is_file:
                 ai_key, ai_option = ai[f["idx"]]
-                person = any(PERSON_FIELD.search(w) for w in map(words_of, (f.get("bits") or [])[:4]))
+                person = bool(f.get("_person")) or (
+                    ai_key in ("title", "running_title")
+                    and any(PERSON_FIELD.search(w) for w in map(words_of, (f.get("bits") or [])[:4]))
+                )
                 key = None if person else ai_key  # hard rule: person fields are never filled
             if not key and f["type"] in ("radio", "select") and \
                     answer_question(f.get("bits") or [], f.get("options") or [], plan.values):
@@ -865,8 +875,15 @@ def automation_score(package_dir: Path) -> dict:
 def write_report(package_dir: Path, url: str, lines: list[str]) -> None:
     import datetime as dt
 
+    entry = f"\n== {dt.datetime.now():%H:%M:%S} {url}\n" + "\n".join(lines) + "\n"
     with open(package_dir / "form_report.txt", "a", encoding="utf-8") as f:
-        f.write(f"\n== {dt.datetime.now():%H:%M:%S} {url}\n" + "\n".join(lines) + "\n")
+        f.write(entry)
+    if (Path.home() / "Documents" / "JournalFit").resolve() in package_dir.resolve().parents:
+        try:
+            with open(Path(__file__).resolve().parents[2] / ".last_form_report.txt", "a", encoding="utf-8") as f:
+                f.write(entry)
+        except OSError:
+            pass
 
 
 def run(package_dir: Path, url: str | None = None, autopilot: bool = True) -> None:

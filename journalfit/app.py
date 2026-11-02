@@ -169,7 +169,7 @@ def _cand_json(c) -> dict:
 
 
 def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], declarations: dict | None = None) -> dict:
-    from .prepare import build_package
+    from .prepare import build_package, clean_submission_url
 
     res = find_job.data["result"]
     cand = res.backups[int(index[1:])] if str(index).startswith("b") else res.ranked[int(index)]
@@ -187,15 +187,16 @@ def run_prepare(job: Job, find_job: Job, index: str, supplements: list[str], dec
     job.say("Package ready.")
     if claude:
         job.say(f"Estimated AI cost of this step: ${claude.cost.usd - before:.2f}")
+    sub_url = clean_submission_url(meta.get("submission_url") or "")
     return {
         "journal": cand.journal.name, "package": str(pkg),
         "checklist": (pkg / "checklist.md").read_text(),
         "cover_letter": cover.read_text() if cover.exists() else "",
         # No portal link found: left empty for the author to paste. The journal's homepage is not
         # a submission site, and publisher homepages often block automated browsers.
-        "submission_url": meta.get("submission_url") or "",
+        "submission_url": sub_url,
         "guidelines_url": meta.get("guidelines_url") or cand.journal.homepage or "",
-        "submission_url_found": bool(meta.get("submission_url")),
+        "submission_url_found": bool(sub_url),
         "submission_url_note": meta.get("submission_url_note") or "",
         "files": sorted(p.name for p in pkg.iterdir()),
         "supplementary": meta.get("supplementary_files", []),
@@ -250,6 +251,9 @@ class Assistant:
         self.thread: threading.Thread | None = None
 
     def start(self, package: str, url: str) -> None:
+        from .prepare import clean_submission_url
+
+        url = clean_submission_url(url)
         if self.active:
             self.q.put(("goto", url))
             return

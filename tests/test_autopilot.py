@@ -347,7 +347,9 @@ def test_wiley_submission_link_from_the_journals_doi_code():
     assert known_submission_link(cand("Wiley", ["10.1111/issj.1", "10.1002/bse.2"])) is None  # codes disagree
     assert known_submission_link(cand("Springer", ["10.1111/issj.12580"])) is None
     assert known_submission_link(cand("Taylor & Francis", [], "https://www.tandfonline.com/toc/raec20/current")) == \
-        ("https://rp.tandfonline.com/submission/create?journalCode=raec20", "Taylor & Francis Submission Portal")
+        ("https://rp.tandfonline.com/submission/create?journalCode=RAEC", "Taylor & Francis Submission Portal")
+    assert extract_submission_url("Submit at https://rp.tandfonline.com/submission/create?journalCode=ksgt20") == \
+        ("https://rp.tandfonline.com/submission/create?journalCode=KSGT", "Taylor & Francis Submission Portal")
     assert known_submission_link(cand("MDPI", [], "https://www.mdpi.com/journal/sustainability")) == \
         ("https://susy.mdpi.com/user/manuscripts/upload?journal=sustainability", "MDPI SuSy")
     assert extract_submission_url('<a href="https://www.editorialmanager.com/jclepro/default.aspx">Submit</a>') == \
