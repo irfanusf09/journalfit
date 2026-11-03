@@ -6,7 +6,7 @@
 // (page.js). When autopilot is enabled, safe Next and Add author/reviewer buttons are also
 // clicked automatically after the page settles; Submit is never pressed.
 
-const BG_VERSION = '0.3.2';
+const BG_VERSION = '0.3.3';
 const PORTS = Array.from({length: 20}, (_, i) => 8765 + i);
 let app = null;  // {base, token}
 

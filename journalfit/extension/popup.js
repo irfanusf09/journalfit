@@ -15,7 +15,7 @@ async function refresh() {
   const s = await send({type: 'state', tabId});
   if (!s) return;
   // If Chrome is still running an older background service worker in memory, reload it automatically.
-  if (s.bgVersion !== '0.3.2') {
+  if (s.bgVersion !== '0.3.3') {
     chrome.runtime.reload();
     return;
   }

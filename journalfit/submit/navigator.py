@@ -27,7 +27,7 @@ FORBIDDEN = re.compile(
     re.I)
 
 NEXT = re.compile(
-    r"^\s*(save\s*(and|&|\+)\s*)?(continue|next|proceed)(\s+(step|page|to\s+next\s+step))?\s*[>»›→]*\s*$|"
+    r"^\s*(save\s*(and|&|\+)\s*)?(continue|next|proceed)(\s+(step|page|submission|to\s+next\s+step))?\s*[>»›→]*\s*$|"
     r"^\s*next\s*[>»›→]+\s*$|^\s*(go\s+to\s+)?next\s+(step|page|section)\s*[>»›→]*\s*$|"
     r"^\s*save\s*(and|&|\+)\s*(go\s+to\s+)?next(\s+(step|page|section))?\s*[>»›→]*\s*$",
     re.I)

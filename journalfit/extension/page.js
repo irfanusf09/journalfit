@@ -57,7 +57,7 @@
   };
 
   // A key press the way the site's own code reads it (Enter turns a typed keyword into a chip).
-  const CODES = {Enter: 13, Tab: 9, ',': 188};
+  const CODES = {Enter: 13, Tab: 9, ',': 188, ArrowDown: 40};
   const press = (el, key) => {
     el.focus();
     for (const type of ['keydown', 'keypress', 'keyup']) {
@@ -66,9 +66,37 @@
     }
   };
 
+  const BAD_ARTICLE = /review|letter|editorial|comment|short|brief|erratum|correction|book|perspective|case/i;
+  const tryComboOption = async (el, value) => {
+    const isCombo = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list' ||
+      /^id_[0-9a-f-]{20,}$/i.test(el.id || '') || (value === 'Research Article' || value === 'Review Article');
+    if (!isCombo) return false;
+    el.focus();
+    if (el.parentElement) el.parentElement.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+    el.click();
+    press(el, 'ArrowDown');
+    await sleep(220);
+    const opts = [...document.querySelectorAll('[role="option"], mat-option, [id*="-option-"], [class*="-option"]')]
+      .filter((o) => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 && norm(o.innerText || o.textContent); });
+    if (!opts.length) return false;
+    let hit = opts.find((o) => norm(o.innerText || o.textContent).toLowerCase() === norm(value).toLowerCase());
+    if (!hit && value === 'Research Article') {
+      hit = opts.find((o) => { const t = norm(o.innerText || o.textContent); return /original|research/i.test(t) && !BAD_ARTICLE.test(t); }) ||
+            opts.find((o) => /^\s*(full[\s-]*length\s+)?article\s*$/i.test(norm(o.innerText || o.textContent)));
+    } else if (!hit && value === 'Review Article') {
+      hit = opts.find((o) => { const t = norm(o.innerText || o.textContent); return /review/i.test(t) && !/book/i.test(t); });
+    }
+    if (!hit) return false;
+    hit.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+    hit.click();
+    return true;
+  };
+
   self.JF_RUN = async (ops) => {
     const failed = [];
     let focused = null;
+    let comboPicked = false;
     for (const op of ops) {
       try {
         if (op.op === 'wait') { await sleep(op.ms); continue; }
@@ -92,12 +120,14 @@
         if (op.op === 'click_btn' && failed.length > 0) continue;  // never advance if a field failed
         const el = find(op.sel);
         if (!el) throw new Error('box no longer on the page');
-        if (op.op === 'fill') setValue(el, op.value);
-        else if (op.op === 'select') choose(el, op.label);
+        if (op.op === 'fill') {
+          comboPicked = await tryComboOption(el, op.value);
+          if (!comboPicked) setValue(el, op.value);
+        } else if (op.op === 'select') choose(el, op.label);
         else if (op.op === 'check') {
           if (!el.checked) el.click();
           if (!el.checked) { el.checked = true; fire(el, 'input', 'change'); }
-        } else if (op.op === 'click') { el.focus(); el.click(); focused = el; }  // only boxes, never buttons
+        } else if (op.op === 'click') { el.focus(); el.click(); focused = el; comboPicked = false; }  // only boxes, never buttons
         else if (op.op === 'click_btn') {
           if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
           await sleep(150);
@@ -106,7 +136,10 @@
           if (FORBIDDEN.test(words)) throw new Error('forbidden button wording; not clicked');
           el.click();
         } else if (op.op === 'files') attach(el, op.files);
-        else if (op.op === 'press') press(el, op.key);
+        else if (op.op === 'press') {
+          if (!(comboPicked && op.key === 'Enter')) press(el, op.key);
+          comboPicked = false;
+        }
         await sleep(60);  // let the site react, as it would to typing
       } catch (e) {
         failed.push({op: op.op, sel: op.sel || '', paths: op.paths || [], error: String(e && e.message || e)});

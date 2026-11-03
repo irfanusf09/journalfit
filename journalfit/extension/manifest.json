@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JournalFit",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Fills journal submission forms and runs safe Autopilot navigation from the package JournalFit prepared. You sign in and click Submit yourself.",
   "permissions": ["activeTab", "scripting", "storage", "webNavigation"],
   "host_permissions": [
