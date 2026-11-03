@@ -197,15 +197,28 @@ FIELD_RULES: list[tuple[str, re.Pattern]] = [
                                        r"(before|previously)|prior\s+submission", re.I)),
 ]
 FILE_RULES: list[tuple[str, re.Pattern]] = [
-    ("cover_letter_file", re.compile(r"cover[\s_-]*letter", re.I)),
-    # A box that also says "manuscript" is the manuscript box ("Manuscript (with figures)").
-    ("title_page_file", re.compile(r"^(?!.*manuscript).*title[\s_-]*page", re.I)),
-    ("highlights_file", re.compile(r"^(?!.*manuscript).*highlights", re.I)),
-    ("figure_file", re.compile(r"^(?!.*manuscript).*\bfig(ure)?s?\b", re.I)),
+    ("cover_letter_file", re.compile(r"cover[\s_-]*letter|comments?\s+or\s+information\s+for\s+editorial\s+consideration", re.I)),
+    # A box that also says "manuscript" is the manuscript box ("Manuscript (with figures)"),
+    # unless it only mentions "manuscript title" (e.g. Wiley's Title Page description).
+    ("title_page_file", re.compile(r"^(?!.*\bmanuscript\b(?!\s+title)).*title[\s_-]*page", re.I)),
+    ("highlights_file", re.compile(r"^(?!.*\bmanuscript\b(?!\s+title)).*highlights", re.I)),
+    ("figure_file", re.compile(r"^(?!.*\bmanuscript\b(?!\s+title)).*\bfig(ure)?s?\b", re.I)),
     ("supplementary_file", re.compile(r"supplement|supporting[\s_-]*(info|material|file)|additional[\s_-]*file|"
                                       r"appendi(x|ces)|electronic[\s_-]*supplementary|\bESM\b|\bSI\b", re.I)),
-    ("manuscript_file", re.compile(r"manuscript|main[\s_-]*(document|file)|article file|upload|file", re.I)),
+    ("manuscript_file", re.compile(r"^(?!.*(aren['\u2019]t\s+(embedded\s+in|part\s+of)\s+your\s+main\s+document|"
+                                   r"provide\s+(figures|tables)\s+separately|"
+                                   r"will\s+not\s+be\s+(available|shown)\s+to\s+peer\s+reviewers)).*"
+                                   r"(manuscript|main[\s_-]*(document|file)|article file|upload|file)", re.I)),
 ]
+
+CONFIRM_BOX = re.compile(
+    r"submitted\s+solely|not\s+published,\s+in\s+press,\s+or\s+submitted\s+elsewhere|"
+    r"not\s+under\s+consideration\s+elsewhere|prepared\s+my\s+paper\s+and\s+files\s+in\s+accordance|"
+    r"disclose\s+any\s+potential\s+sources\s+of\s+conflict\s+of\s+interest|"
+    r"regular\s+operations\s+of\s+the\s+publication|all\s+co-?authors\s+have\s+(reviewed|approved)|"
+    r"required\s+to\s+declare\s+the\s+use\s+of\s+any\s+artificial\s+intelligence",
+    re.I,
+)
 
 
 @dataclass
@@ -318,15 +331,27 @@ def match_bits(bits: list[str], is_file: bool) -> str | None:
 
     Any person-detail wording close to the field (its own label, name or the text just before it)
     rules out 'title', so an author's "Title (Dr/Prof)" box never gets the manuscript title.
+    For file inputs, specific file types (title page, cover letter, figure, supplementary) are
+    checked across the field's labels before falling back to the generic manuscript rule.
     """
     from . import people as people_mod
 
     words = list(map(words_of, bits))
     if not is_file and people_mod.is_person_field(bits):
         return None
-    person_near = not is_file and any(PERSON_FIELD.search(w) for w in words[:4])
+    if is_file:
+        for bit in words:
+            for key, rx in FILE_RULES[:-1]:
+                if rx.search(bit):
+                    return key
+        for bit in words:
+            key, rx = FILE_RULES[-1]
+            if rx.search(bit):
+                return key
+        return None
+    person_near = any(PERSON_FIELD.search(w) for w in words[:4])
     for bit in words:
-        for key, rx in (FILE_RULES if is_file else FIELD_RULES):
+        for key, rx in FIELD_RULES:
             if rx.search(bit):
                 if key in ("title", "running_title") and person_near and not re.search(
                         r"manuscript|article|paper|submission|running|short", bit, re.I):
@@ -678,7 +703,7 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                 elif f["type"] == "checkbox":
                     if f["value"]:
                         action = "already ticked (left unchanged)"
-                    elif key == "confirm" and plan.values.get("confirm"):
+                    elif (key == "confirm" or CONFIRM_BOX.search(f["label"])) and plan.values.get("confirm"):
                         loc.check(force=True)
                         action = "ticked (standard confirmation)"
                     else:
@@ -699,7 +724,19 @@ def fill_page(page, plan: Plan, log=print, uploaded: set | None = None, report: 
                     action = f"selected '{ai_option}'"
                 elif key == "article_type":
                     if f["type"] != "select":
-                        action = "article type is not a list (left for you)"
+                        already = pick_article_type(
+                            [b for b in (f.get("bits") or []) if len(b) < 40 and not re.search(r"type|kind|submitting|board", b, re.I)],
+                            plan.values.get("article_type", ""),
+                        )
+                        if already:
+                            action = "already has a value (left unchanged)"
+                        else:
+                            want_review = bool(re.search(r"review", plan.values.get("article_type", ""), re.I))
+                            guess = "Review Article" if want_review else "Research Article"
+                            loc.click()
+                            loc.fill(guess)
+                            loc.press("Enter")
+                            action = f"filled article_type ('{guess}')"
                     else:
                         choice = pick_article_type(f.get("options") or [], plan.values.get("article_type", ""))
                         if choice:

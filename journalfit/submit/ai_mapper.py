@@ -99,10 +99,13 @@ def make_mapper(llm, log=None):
             "or a yes/no question answered by a declaration). Otherwise use \"none\".\n"
             "- For a radio question, set \"option\" to the exact option text, only if a declaration clearly "
             "answers it (e.g. 'Do you have competing interests?' -> 'No' when the declaration says none).\n"
-            "- For a tick box (checkbox), use item \"confirm\" only if its text is one of the standard "
-            "confirmations listed; anything else (e.g. opting into services, transfers, newsletters) is \"none\".\n"
+            "- For a tick box (checkbox), use item \"confirm\" for EVERY checkbox whose text is one of the "
+            "standard confirmations (originality, sole submission, author guidelines, co-author approval, "
+            "conflict-of-interest or AI disclosure rules); anything else (e.g. opting into marketing, "
+            "transfers, or AI training on rejected papers) is \"none\".\n"
             "- For text boxes, \"option\" is null.\n"
-            "- Each item normally goes in one box only."
+            "- Each text item normally goes in one box only, except \"confirm\" which should be used for all "
+            "matching standard confirmation checkboxes on the page."
         )
         data = llm.structured(SYSTEM, prompt, SCHEMA, effort="low")
         valid_ids = {f["idx"]: f for f in fields}
